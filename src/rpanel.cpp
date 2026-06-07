@@ -16,6 +16,7 @@
 #include <stdio.h>    /* sscanf, sprintf                              */
 
 #include "rpanel.h"
+#include "i18n.h"
 
 /* ------------------------------------------------------------------ */
 /* Kleine Helfer                                                       */
@@ -285,7 +286,7 @@ int RemotePanel::refresh()
     navFailed = 0;
 
     if (!ftp || !ftp->is_connected()) {
-        strcpy(header, "(nicht verbunden)");
+        strcpy(header, L("(nicht verbunden)", "(not connected)"));
         cwd[0] = '\0';
         return 0;
     }
