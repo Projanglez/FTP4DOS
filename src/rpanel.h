@@ -15,6 +15,13 @@
 #include "panel.h"
 #include "ftpcli.h"
 
+/* Eine rohe LIST-Zeile in einen PanelEntry parsen (Unix- oder DOS/IIS-Format).
+ * curYear liefert das Jahr fuer Zeilen, die nur eine Uhrzeit (kein Jahr) tragen.
+ * Rueckgabe 1 = erkannt (e gefuellt: name, size, date, is_dir, marked=0),
+ *           0 = Zeile nicht als Eintrag erkennbar. Wird auch vom rekursiven
+ * Verzeichnis-Download (dircopy.cpp) genutzt. */
+int ftp_parse_list_line(const char *line, int curYear, PanelEntry *e);
+
 class RemotePanel : public Panel {
 public:
     RemotePanel();
@@ -42,11 +49,6 @@ private:
     /* LIST-Callback (ftpcli ruft pro Roh-Zeile auf). */
     static void on_line(void *ctx, const char *line);
     void add_line(const char *line);
-
-    /* Parser fuer die beiden gaengigen Listing-Formate.
-     * Rueckgabe 1 = erkannt + e gefuellt, 0 = nicht dieses Format. */
-    int  parse_unix(const char *line, PanelEntry *e);
-    int  parse_dos (const char *line, PanelEntry *e);
 
     static int compare(const void *a, const void *b);  /* qsort-Vergleich */
 };

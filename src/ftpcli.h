@@ -23,6 +23,7 @@
 #define FTP_ERR_DATACONN  -7   /* Datenverbindung fehlgeschlagen         */
 #define FTP_ERR_LOCALIO   -8   /* Lokaler Datei-Fehler                   */
 #define FTP_ERR_SERVER    -9   /* Server antwortete mit 4xx/5xx          */
+#define FTP_ERR_ABORT    -10   /* Benutzer hat den Vorgang abgebrochen   */
 
 
 /* --- Zustaende (vgl. CLAUDE.md) --------------------------------------- */
@@ -85,6 +86,10 @@ public:
               FtpProgressCb cb, void *ctx);
     int  stor(const char *localpath, const char *remote,
               FtpProgressCb cb, void *ctx);
+
+    /* 1, falls auf dem Server eine Datei mit diesem Pfad existiert (per SIZE).
+     * Fuer die Ueberschreiben-Abfrage beim rekursiven Upload. */
+    int  remote_file_exists(const char *path);
 
     /* Dateioperationen auf dem Server. */
     int  make_dir(const char *path);             /* MKD          */

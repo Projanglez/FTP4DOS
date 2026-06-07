@@ -55,6 +55,7 @@ APP_OBJS = &
     src\ftpcli.obj &
     src\dialog.obj &
     src\viewer.obj &
+    src\dircopy.obj &
     src\i18n.obj
 
 # -----------------------------------------------------------------------------
@@ -85,7 +86,7 @@ all: $(TARGET) .SYMBOLIC
 $(TARGET): $(ALL_OBJS)
     $(LINK) &
         system dos &
-        option stack=16384 &
+        option stack=32768 &
         option map=$(MAPFILE) &
         name $(TARGET) &
         file { $(ALL_OBJS) }
@@ -97,7 +98,7 @@ $(TARGET): $(ALL_OBJS)
 # -----------------------------------------------------------------------------
 # -zt256: grosse Panel-Globals (g_left/g_right, ~25 KB je) in FAR-Datensegmente
 # legen, damit DGROUP (64 KB, large model) nicht ueberlaeuft.
-src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h src\viewer.h src\i18n.h
+src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h src\viewer.h src\dircopy.h src\i18n.h
     $(CPP) $(CFLAGS) -zt256 $(INCPATH) -fo=$@ $[@
 
 src\tui.obj: src\tui.cpp src\tui.h
@@ -119,6 +120,9 @@ src\dialog.obj: src\dialog.cpp src\dialog.h src\tui.h src\keymap.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\viewer.obj: src\viewer.cpp src\viewer.h src\tui.h src\keymap.h src\dialog.h src\i18n.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\dircopy.obj: src\dircopy.cpp src\dircopy.h src\ftpcli.h src\panel.h src\rpanel.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\i18n.obj: src\i18n.cpp src\i18n.h

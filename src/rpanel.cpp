@@ -140,7 +140,7 @@ int RemotePanel::compare(const void *a, const void *b)
 /* ------------------------------------------------------------------ */
 /* Unix-"ls -l"-Format                                                 */
 /* ------------------------------------------------------------------ */
-int RemotePanel::parse_unix(const char *line, PanelEntry *e)
+static int parse_unix(const char *line, int curYear, PanelEntry *e)
 {
     char c0 = line[0];
     if (!strchr("-dlbcps", c0)) return 0;       /* kein Permission-Block */
@@ -208,7 +208,7 @@ int RemotePanel::parse_unix(const char *line, PanelEntry *e)
 /* ------------------------------------------------------------------ */
 /* MS-DOS / IIS-Format                                                 */
 /* ------------------------------------------------------------------ */
-int RemotePanel::parse_dos(const char *line, PanelEntry *e)
+static int parse_dos(const char *line, PanelEntry *e)
 {
     if (!isdigit((unsigned char)line[0])) return 0;
     if (line[2] != '-' && line[2] != '/') return 0;       /* Datum MM-TT-.. */
@@ -253,6 +253,17 @@ int RemotePanel::parse_dos(const char *line, PanelEntry *e)
 }
 
 /* ------------------------------------------------------------------ */
+/* Oeffentlicher Parser (Unix- oder DOS-Format)                        */
+/* ------------------------------------------------------------------ */
+int ftp_parse_list_line(const char *line, int curYear, PanelEntry *e)
+{
+    e->marked = 0;
+    if (parse_unix(line, curYear, e)) return 1;
+    if (parse_dos(line, e))           return 1;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* LIST-Callback                                                       */
 /* ------------------------------------------------------------------ */
 void RemotePanel::on_line(void *ctx, const char *line)
@@ -265,7 +276,7 @@ void RemotePanel::add_line(const char *line)
     if (count >= PANEL_MAX_ENTRIES) return;
 
     PanelEntry tmp;
-    if (!parse_unix(line, &tmp) && !parse_dos(line, &tmp)) return;  /* nicht lesbar */
+    if (!ftp_parse_list_line(line, curYear, &tmp)) return;          /* nicht lesbar */
 
     /* "." und ".." aus dem Listing verwerfen (".." fuegen wir selbst hinzu). */
     if (tmp.name[0] == '\0') return;
@@ -304,7 +315,7 @@ int RemotePanel::refresh()
         PanelEntry *e = &entries[count++];
         strcpy(e->name, "..");
         e->size = 0; e->date = 0; e->time = 0;
-        e->is_dir = 1; e->is_parent = 1;
+        e->is_dir = 1; e->is_parent = 1; e->marked = 0;
     }
 
     int rc = ftp->list(0, on_line, this);

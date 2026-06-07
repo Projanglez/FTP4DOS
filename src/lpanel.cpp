@@ -63,6 +63,7 @@ int LocalPanel::refresh()
             e->is_dir    = (ff.attrib & _A_SUBDIR) ? 1 : 0;
             e->is_parent = (ff.name[0] == '.' && ff.name[1] == '.' &&
                             ff.name[2] == '\0') ? 1 : 0;
+            e->marked    = 0;
             count++;
         }
         rc = _dos_findnext(&ff);

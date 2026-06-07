@@ -674,6 +674,16 @@ int FtpClient::stor(const char *localpath, const char *remote,
 /* Server-Dateioperationen                                               */
 /* ===================================================================== */
 
+int FtpClient::remote_file_exists(const char *path) {
+    if (!is_connected()) return 0;
+    /* TYPE I, damit SIZE auch bei Servern funktioniert, die es im ASCII-Modus
+     * ablehnen. Fehler hier ignorieren. */
+    simpleCmd("TYPE", "I");
+    if (sendCmdArg("SIZE", path) != FTP_OK) return 0;
+    int code = readReply();
+    return (code == 213) ? 1 : 0;
+}
+
 int FtpClient::make_dir(const char *path) {
     if (!is_connected()) { setError(L("Nicht verbunden", "Not connected")); return FTP_ERR_GENERAL; }
     int rc = simpleCmd("MKD", path);        /* 257 */

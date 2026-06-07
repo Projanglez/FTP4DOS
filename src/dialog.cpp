@@ -5,6 +5,7 @@
  * ===========================================================================*/
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #include "dialog.h"
 #include "tui.h"
@@ -13,6 +14,11 @@
 
 /* Puffer fuer den gesicherten Bildschirm hinter dem Dialog (4000 Bytes). */
 static unsigned char dlg_screen[SCREEN_CELLS * 2];
+
+/* Eigener Puffer fuer den Fortschrittsdialog: dieser darf gleichzeitig mit
+ * einem modalen Dialog offen sein (z.B. die Ueberschreiben-Abfrage waehrend
+ * eines laufenden Kopiervorgangs), daher braucht er eine getrennte Sicherung. */
+static unsigned char prog_screen[SCREEN_CELLS * 2];
 
 #define DLG_SHADOW 0x08   /* Attribut der Schlagschatten-Zellen (dunkel) */
 
@@ -318,7 +324,7 @@ void dlg_progress_begin(const char *title, const char *fromname)
     prog_lastunit = (unsigned long)-1L;
     prog_active   = 1;
 
-    save_screen(dlg_screen);
+    save_screen(prog_screen);
     draw_dialog_frame(prog_top, prog_left, prog_rows, prog_cols, title, bg);
 
     sprintf(buf, L("Datei: %.34s", "File: %.34s"), fromname ? fromname : "");
@@ -352,9 +358,140 @@ void dlg_progress_update(unsigned long sofar, unsigned long total)
     }
 }
 
+void dlg_progress_setfile(const char *name)
+{
+    char buf[80];
+    if (!prog_active) return;
+
+    prog_lastpct  = -1;
+    prog_lastunit = (unsigned long)-1L;
+
+    fill_rect(prog_top + 1, prog_left + 2, 1, prog_cols - 4, ' ', ATTR_DIALOG_BG);
+    sprintf(buf, L("Datei: %.34s", "File: %.34s"), name ? name : "");
+    draw_text(prog_top + 1, prog_left + 2, buf, ATTR_DIALOG_BG, prog_cols - 4);
+    prog_draw_bar(0);
+}
+
 void dlg_progress_end(void)
 {
     if (!prog_active) return;
-    restore_screen(dlg_screen);
+    restore_screen(prog_screen);
     prog_active = 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Auswahldialog (Nachricht + vertikale Optionsliste)
+ * ---------------------------------------------------------------------- */
+int dlg_choice(const char *title, const char *msg,
+               const char *const *items, int count)
+{
+    char lines[DLG_MAX_LINES][72];
+    int  nlines = split_lines(msg, lines);
+    int  w = 0, i, cols, rows, top, left, optrow0, sel = 0, result;
+    unsigned char bg = ATTR_DIALOG_BG;
+
+    if (count <= 0) return -1;
+
+    if (title) { int t = (int)strlen(title); if (t > w) w = t; }
+    for (i = 0; i < nlines; i++) { int l = (int)strlen(lines[i]); if (l > w) w = l; }
+    for (i = 0; i < count;  i++) { int l = (int)strlen(items[i]) + 2; if (l > w) w = l; }
+
+    cols    = clamp_cols(w);
+    rows    = nlines + count + 3;   /* Rahmen, Text, Leerzeile, Optionen, Rahmen */
+    top     = (SCREEN_ROWS - rows) / 2;
+    left    = (SCREEN_COLS - cols) / 2;
+    optrow0 = top + 1 + nlines + 1;
+
+    save_screen(dlg_screen);
+    draw_dialog_frame(top, left, rows, cols, title, bg);
+    for (i = 0; i < nlines; i++)
+        draw_text(top + 1 + i, left + 2, lines[i], bg, cols - 4);
+
+    for (;;) {
+        int k;
+        for (i = 0; i < count; i++) {
+            unsigned char a = (i == sel) ? ATTR_DIALOG_HL : bg;
+            fill_rect(optrow0 + i, left + 2, 1, cols - 4, ' ', a);
+            draw_text(optrow0 + i, left + 3, items[i], a, cols - 5);
+        }
+        k = readkey();
+        if (k == KEY_ESC)        { result = -1;  break; }
+        if (k == KEY_ENTER)      { result = sel; break; }
+        if (k == KEY_UP)         { if (sel > 0) sel--; }
+        else if (k == KEY_DOWN)  { if (sel < count - 1) sel++; }
+        else if (k == KEY_HOME)  { sel = 0; }
+        else if (k == KEY_END)   { sel = count - 1; }
+    }
+
+    restore_screen(dlg_screen);
+    return result;
+}
+
+/* -------------------------------------------------------------------------
+ * Vertikales Auswahlmenue
+ * ---------------------------------------------------------------------- */
+int dlg_menu(const char *title, const char *const *items, int count, int initial)
+{
+    int w = 0, i, cols, rows, top, left, vis, maxvis, topidx, sel, result;
+    unsigned char bg = ATTR_DIALOG_BG;
+
+    if (count <= 0) return -1;
+
+    if (title) { int t = (int)strlen(title); if (t > w) w = t; }
+    for (i = 0; i < count; i++) {
+        int l = (int)strlen(items[i]);
+        if (l > w) w = l;
+    }
+
+    cols   = clamp_cols(w);
+    maxvis = SCREEN_ROWS - 6;
+    if (maxvis < 1) maxvis = 1;
+    vis    = (count < maxvis) ? count : maxvis;
+    rows   = vis + 2;                         /* Rahmen oben/unten + Eintraege */
+    top    = (SCREEN_ROWS - rows) / 2;
+    left   = (SCREEN_COLS - cols) / 2;
+
+    sel = initial;
+    if (sel < 0) sel = 0;
+    if (sel >= count) sel = count - 1;
+    topidx = 0;
+
+    save_screen(dlg_screen);
+    draw_dialog_frame(top, left, rows, cols, title, bg);
+
+    for (;;) {
+        int k;
+
+        if (sel < topidx)            topidx = sel;
+        if (sel >= topidx + vis)     topidx = sel - vis + 1;
+
+        for (i = 0; i < vis; i++) {
+            int idx = topidx + i;
+            unsigned char a = (idx == sel) ? ATTR_DIALOG_HL : bg;
+            fill_rect(top + 1 + i, left + 2, 1, cols - 4, ' ', a);
+            if (idx < count)
+                draw_text(top + 1 + i, left + 2, items[idx], a, cols - 4);
+        }
+
+        k = readkey();
+        if (k == KEY_ESC)        { result = -1;  break; }
+        if (k == KEY_ENTER)      { result = sel; break; }
+        if (k == KEY_UP)         { if (sel > 0) sel--; }
+        else if (k == KEY_DOWN)  { if (sel < count - 1) sel++; }
+        else if (k == KEY_HOME)  { sel = 0; }
+        else if (k == KEY_END)   { sel = count - 1; }
+        else if (k == KEY_PGUP)  { sel -= vis; if (sel < 0) sel = 0; }
+        else if (k == KEY_PGDN)  { sel += vis; if (sel > count - 1) sel = count - 1; }
+        else if (k >= 0x20 && k < 0x7F) {
+            /* Direktwahl: erster Eintrag mit passendem Anfangsbuchstaben. */
+            int up = toupper((unsigned char)k);
+            int hit = -1;
+            for (i = 0; i < count && hit < 0; i++)
+                if (toupper((unsigned char)items[i][0]) == up) hit = i;
+            if (hit >= 0) { result = hit; break; }
+        }
+    }
+
+    restore_screen(dlg_screen);
+    return result;
 }

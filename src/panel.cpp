@@ -120,6 +120,43 @@ PanelEntry *Panel::selected()
     return &entries[cursor];
 }
 
+PanelEntry *Panel::entry_at(int i)
+{
+    if (i < 0 || i >= count) return 0;
+    return &entries[i];
+}
+
+/* --- Mehrfachauswahl ---------------------------------------------------- */
+void Panel::toggle_mark()
+{
+    PanelEntry *e = selected();
+    if (e && !e->is_parent)
+        e->marked = (unsigned char)(e->marked ? 0 : 1);
+    move_down();                 /* wie Norton Commander: weiter nach unten */
+}
+
+void Panel::clear_marks()
+{
+    int i;
+    for (i = 0; i < count; i++) entries[i].marked = 0;
+}
+
+int Panel::marked_count() const
+{
+    int i, n = 0;
+    for (i = 0; i < count; i++) if (entries[i].marked) n++;
+    return n;
+}
+
+unsigned long Panel::marked_size() const
+{
+    unsigned long s = 0;
+    int i;
+    for (i = 0; i < count; i++)
+        if (entries[i].marked && !entries[i].is_dir) s += entries[i].size;
+    return s;
+}
+
 int Panel::has_entry(const char *name) const
 {
     int i;
@@ -225,7 +262,10 @@ void Panel::draw()
         unsigned char a;
 
         if (idx < count) {
-            a = (active && idx == cursor) ? ATTR_SELECTED : ATTR_PANEL;
+            int is_cur = (active && idx == cursor);
+            int is_mk  = entries[idx].marked;
+            if (is_cur) a = is_mk ? ATTR_MARKED_SEL : ATTR_SELECTED;
+            else        a = is_mk ? ATTR_MARKED     : ATTR_PANEL;
             fill_rect(row, left + 1, 1, inner, ' ', a);
             format_entry(&entries[idx], buf, inner);
             draw_text(row, left + 1, buf, a, inner);

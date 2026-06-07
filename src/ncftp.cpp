@@ -12,11 +12,13 @@
  *
  * Sprache (Deutsch/Englisch) wird beim Start aus der DOS-Laendereinstellung
  * abgeleitet; alle sichtbaren Texte laufen ueber L("de","en").
+ * Kommandozeile: NCFTP EN  (oder /EN, -EN) -> erzwingt Englisch.
  * ===========================================================================*/
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <direct.h>
+#include <dos.h>
 
 #include "tui.h"
 #include "panel.h"
@@ -26,6 +28,7 @@
 #include "keymap.h"
 #include "dialog.h"
 #include "viewer.h"
+#include "dircopy.h"
 #include "i18n.h"
 
 /* ---- Bildschirm-Layout ---- */
@@ -49,6 +52,16 @@ static Panel      *g_active = 0;
 static FtpClient g_ftp;
 static int       g_ftp_ready = 0;
 
+/* Kritischer-Fehler-Handler (INT 24h): verhindert die DOS-Abfrage
+ * "Abort, Retry, Fail?" - z.B. bei einem leeren Diskettenlaufwerk. Statt den
+ * Bildschirm zu zerstoeren, lassen wir die fehlgeschlagene DOS-Operation
+ * einfach mit Fehler zurueckkehren ("Fail"). Wird einmal in main() registriert. */
+static int ncftp_harderr(unsigned deverr, unsigned errcode, unsigned *devhdr)
+{
+    (void)deverr; (void)errcode; (void)devhdr;
+    return _HARDERR_FAIL;           /* fehlgeschlagene DOS-Operation: einfach scheitern */
+}
+
 /* -------------------------------------------------------------------------
  * Bildschirm-Chrome
  * ---------------------------------------------------------------------- */
@@ -58,11 +71,11 @@ static const char *fkey_label(int i)
 {
     static const char *de[10] = {
         "Hilfe", "Verb", "Anzeig", "Edit", "Kopier",
-        "Umben", "MkDir", "Loesch", "Menue", "Ende"
+        "Umben", "MkDir", "Loesch", "Laufw", "Ende"
     };
     static const char *en[10] = {
         "Help", "Conn", "View", "Edit", "Copy",
-        "Ren",  "MkDir", "Del", "Menu", "Quit"
+        "Ren",  "MkDir", "Del", "Drive", "Quit"
     };
     return g_english ? en[i] : de[i];
 }
@@ -125,6 +138,22 @@ static void draw_statusbar(void)
     clen = (int)strlen(conn);
 
     fill_rect(ROW_STATUS, 0, 1, SCREEN_COLS, ' ', ATTR_STATUSBAR);
+
+    /* Markierungen haben Vorrang vor der Einzeldatei-Info. */
+    if (g_active && g_active->marked_count() > 0) {
+        int nm = g_active->marked_count();
+        unsigned long ms = g_active->marked_size();
+        if (ms > 0) {
+            char num[20];
+            format_thousands(ms, num);
+            sprintf(info, L(" %d markiert   %s Bytes", " %d marked   %s bytes"), nm, num);
+        } else {
+            sprintf(info, L(" %d markiert", " %d marked"), nm);
+        }
+        draw_text(ROW_STATUS, 0, info, ATTR_STATUSBAR, SCREEN_COLS - 2 - clen);
+        draw_text(ROW_STATUS, SCREEN_COLS - clen, conn, ATTR_STATUSBAR, clen);
+        return;
+    }
 
     if (e) {
         if (e->is_dir) {
@@ -234,12 +263,15 @@ static void do_connect(void)
 }
 
 /* -------------------------------------------------------------------------
- * F5 - Datei kopieren zwischen lokalem und Remote-Panel
+ * F5 - Kopieren zwischen lokalem und Remote-Panel
  * Die Richtung ergibt sich aus dem aktiven Panel:
  *   aktiv = lokal  -> Upload   (STOR) lokal  -> Remote
  *   aktiv = remote -> Download (RETR) Remote -> lokal
- * Verzeichnisse werden (noch) nicht rekursiv kopiert. Der Zielname laesst sich
- * vor dem Transfer editieren (Norton-Commander-Manier).
+ *
+ * Es werden alle markierten Eintraege kopiert (Einfg-Taste); ohne Markierung
+ * der Eintrag unter dem Cursor. Verzeichnisse werden rekursiv inkl. aller
+ * Unterverzeichnisse kopiert (dircopy.cpp). Beim Kopieren einer einzelnen
+ * Datei ohne Markierung laesst sich der Zielname vorher editieren.
  * ---------------------------------------------------------------------- */
 
 /* Fortschritts-Callback fuer FtpClient::retr/stor (waehrend des Transfers). */
@@ -247,6 +279,47 @@ static void copy_progress(void *ctx, unsigned long sofar, unsigned long total)
 {
     (void)ctx;
     dlg_progress_update(sofar, total);
+}
+
+/* Callback fuer dircopy: aktuell bearbeitete Datei/Verzeichnis anzeigen. */
+static void copy_item(void *ctx, const char *name, int is_dir)
+{
+    (void)ctx; (void)is_dir;
+    dlg_progress_setfile(name);
+}
+
+/* Zustand eines (rekursiven) Kopiervorgangs - wird je do_copy() neu angelegt,
+ * d.h. "Alle ueberschreiben" gilt nur fuer den aktuellen Vorgang. */
+struct CopyCtx {
+    int overwrite_all;
+};
+
+/* 4-Optionen-Abfrage bei Dateikonflikt. Rueckgabe wie dlg_choice (0..3 / -1). */
+static int dlg_overwrite(const char *name)
+{
+    char        msg[120];
+    const char *items[4];
+    sprintf(msg, L("Datei existiert bereits:\n%.40s",
+                   "File already exists:\n%.40s"), name);
+    items[0] = L("Ueberschreiben",      "Overwrite");
+    items[1] = L("Datei ueberspringen", "Skip file");
+    items[2] = L("Alle ueberschreiben", "Overwrite all");
+    items[3] = L("Vorgang abbrechen",   "Cancel operation");
+    return dlg_choice(L("Ueberschreiben?", "Overwrite?"), msg, items, 4);
+}
+
+/* Konflikt-Callback fuer dircopy + die Einzeldatei-Stapelfaelle. */
+static int copy_conflict(void *vctx, const char *name)
+{
+    CopyCtx *c = (CopyCtx *)vctx;
+    int r;
+    if (c && c->overwrite_all) return DC_OVERWRITE;
+
+    r = dlg_overwrite(name);
+    if (r == 0) return DC_OVERWRITE;                         /* Ueberschreiben */
+    if (r == 1) return DC_SKIP;                              /* Ueberspringen  */
+    if (r == 2) { if (c) c->overwrite_all = 1; return DC_OVERWRITE; }  /* Alle */
+    return DC_ABORT;                                         /* Abbrechen/Esc  */
 }
 
 /* 1, falls die lokale Datei existiert (fuer die Ueberschreiben-Abfrage). */
@@ -272,41 +345,21 @@ static void join_local(char *out, int outsz, const char *dir, const char *name)
     strncat(out, name, outsz - 1 - (int)strlen(out));
 }
 
-static void do_copy(void)
+/* Einzelne Datei interaktiv kopieren (Zielname editierbar, Ueberschreib-Abfrage).
+ * to_remote != 0 => Upload (lokal -> Remote), sonst Download. */
+static void copy_single_file_interactive(int to_remote, PanelEntry *e)
 {
     char target[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
     char prompt[64];
-    PanelEntry *e;
-    int rc;
+    int  rc;
 
-    if (g_active == 0) return;
-
-    if (!g_ftp.is_connected()) {
-        dlg_error(L("Kopieren", "Copy"),
-                  L("Keine FTP-Verbindung.\nMit F2 zuerst verbinden.",
-                    "No FTP connection.\nConnect with F2 first."));
-        redraw_all();
-        return;
-    }
-
-    e = g_active->selected();
-    if (e == 0 || e->is_parent) { redraw_all(); return; }
-    if (e->is_dir) {
-        dlg_error(L("Kopieren", "Copy"),
-                  L("Nur einzelne Dateien koennen kopiert\nwerden, keine Verzeichnisse.",
-                    "Only single files can be copied,\nnot directories."));
-        redraw_all();
-        return;
-    }
-
-    if (g_active == (Panel *)&g_right) {
+    if (!to_remote) {
         /* --- Download: Remote -> lokal --- */
         join_local(target, (int)sizeof(target), g_left.path(), e->name);
         sprintf(prompt, L("\"%.20s\" laden nach:", "Download \"%.20s\" to:"), e->name);
         if (!dlg_input(L("Download", "Download"), prompt, target, (int)sizeof(target) - 1, 0)) { redraw_all(); return; }
         if (target[0] == '\0') { redraw_all(); return; }
 
-        /* Existiert die lokale Datei schon? -> vor jedem FTP-Verkehr nachfragen. */
         if (local_exists(target)) {
             char q[120];
             sprintf(q, L("Lokale Datei existiert bereits:\n%.40s\nUeberschreiben?",
@@ -320,7 +373,7 @@ static void do_copy(void)
         dlg_progress_end();
 
         if (rc != FTP_OK) dlg_error(L("Download fehlgeschlagen", "Download failed"), g_ftp.last_error());
-        g_left.refresh();   /* neue lokale Datei sichtbar machen */
+        g_left.refresh();
     } else {
         /* --- Upload: lokal -> Remote --- */
         char localpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
@@ -331,7 +384,6 @@ static void do_copy(void)
         if (!dlg_input(L("Upload", "Upload"), prompt, target, (int)sizeof(target) - 1, 0)) { redraw_all(); return; }
         if (target[0] == '\0') { redraw_all(); return; }
 
-        /* Existiert die Remote-Datei schon? -> vor jedem FTP-Verkehr nachfragen. */
         if (g_right.has_entry(target)) {
             char q[120];
             sprintf(q, L("Remote-Datei existiert bereits:\n%.40s\nUeberschreiben?",
@@ -345,10 +397,113 @@ static void do_copy(void)
         dlg_progress_end();
 
         if (rc != FTP_OK) dlg_error(L("Upload fehlgeschlagen", "Upload failed"), g_ftp.last_error());
-        g_right.refresh();  /* neue Remote-Datei sichtbar machen */
+        g_right.refresh();
+    }
+    redraw_all();
+}
+
+/* Einen Eintrag (Datei oder Verzeichnis) im Stapelbetrieb kopieren. Zielname =
+ * Quellname im jeweils anderen Panel-Verzeichnis. Verzeichnisse rekursiv.
+ * Bei existierender Zieldatei fragt copy_conflict; Rueckgabe FTP_OK,
+ * FTP_ERR_ABORT (Benutzerabbruch) oder ein anderer FTP_ERR_* Code. */
+static int copy_one_entry(int to_remote, PanelEntry *e, CopyCtx *cc)
+{
+    char localpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
+
+    join_local(localpath, (int)sizeof(localpath), g_left.path(), e->name);
+
+    if (to_remote) {
+        if (e->is_dir)
+            return dircopy_upload(&g_ftp, localpath, e->name,
+                                  copy_item, copy_progress, copy_conflict, cc);
+        /* Einzelne Datei: existiert sie remote schon? */
+        if (g_ftp.remote_file_exists(e->name)) {
+            int d = copy_conflict(cc, e->name);
+            if (d == DC_ABORT) return FTP_ERR_ABORT;
+            if (d == DC_SKIP)  return FTP_OK;
+        }
+        copy_item(0, e->name, 0);
+        return g_ftp.stor(localpath, e->name, copy_progress, cc);
+    } else {
+        if (e->is_dir)
+            return dircopy_download(&g_ftp, e->name, localpath,
+                                    copy_item, copy_progress, copy_conflict, cc);
+        /* Einzelne Datei: existiert sie lokal schon? */
+        if (local_exists(localpath)) {
+            int d = copy_conflict(cc, e->name);
+            if (d == DC_ABORT) return FTP_ERR_ABORT;
+            if (d == DC_SKIP)  return FTP_OK;
+        }
+        copy_item(0, e->name, 0);
+        return g_ftp.retr(e->name, localpath, copy_progress, cc);
+    }
+}
+
+static void do_copy(void)
+{
+    PanelEntry *cur;
+    CopyCtx     cc;
+    int to_remote, nmarked, total, i, rc;
+    const char *destdir;
+    char q[140];
+
+    if (g_active == 0) return;
+
+    if (!g_ftp.is_connected()) {
+        dlg_error(L("Kopieren", "Copy"),
+                  L("Keine FTP-Verbindung.\nMit F2 zuerst verbinden.",
+                    "No FTP connection.\nConnect with F2 first."));
+        redraw_all();
+        return;
     }
 
+    to_remote = (g_active == (Panel *)&g_left);   /* lokal aktiv -> Upload */
+    nmarked   = g_active->marked_count();
+    cur       = g_active->selected();
+
+    /* --- Einzeldatei ohne Markierung: interaktiver Komfortpfad --- */
+    if (nmarked == 0) {
+        if (cur == 0 || cur->is_parent) { redraw_all(); return; }
+        if (!cur->is_dir) { copy_single_file_interactive(to_remote, cur); return; }
+    }
+
+    /* --- Stapel-/Verzeichnis-Kopie --- */
+    total   = (nmarked > 0) ? nmarked : 1;
+    destdir = to_remote ? g_right.path() : g_left.path();
+
+    sprintf(q, L("%d Eintrag/Eintraege kopieren nach:\n%.40s",
+                 "Copy %d item(s) to:\n%.40s"), total, destdir);
+    if (!dlg_confirm(L("Kopieren", "Copy"), q)) { redraw_all(); return; }
+
+    cc.overwrite_all = 0;              /* je Vorgang frisch (kein "Alle" uebernommen) */
+
     redraw_all();
+    dlg_progress_begin(L("Kopieren", "Copy"), "");
+
+    rc = FTP_OK;
+    if (nmarked > 0) {
+        for (i = 0; i < g_active->entry_count(); i++) {
+            PanelEntry *e = g_active->entry_at(i);
+            if (!e || !e->marked || e->is_parent) continue;
+            rc = copy_one_entry(to_remote, e, &cc);
+            if (rc != FTP_OK) break;
+        }
+    } else {
+        rc = copy_one_entry(to_remote, cur, &cc);   /* einzelnes Verzeichnis */
+    }
+
+    dlg_progress_end();
+
+    if (rc != FTP_OK && rc != FTP_ERR_ABORT)
+        dlg_error(L("Kopieren fehlgeschlagen", "Copy failed"), g_ftp.last_error());
+
+    /* Markierungen aufheben und beide Seiten neu einlesen. */
+    g_active->clear_marks();
+    g_left.refresh();
+    g_right.refresh();
+    redraw_all();
+    if (rc == FTP_ERR_ABORT)
+        flash_status(L(" Kopieren abgebrochen.", " Copy aborted."));
 }
 
 /* -------------------------------------------------------------------------
@@ -437,54 +592,132 @@ static void do_mkdir(void)
 /* -------------------------------------------------------------------------
  * F8 - Loeschen mit Bestaetigung (Datei oder leeres Verzeichnis)
  * ---------------------------------------------------------------------- */
-static void do_delete(void)
+/* Einen einzelnen Eintrag loeschen (Datei oder LEERES Verzeichnis).
+ * Rueckgabe 0 = Erfolg, sonst Fehler (Fehlertext liegt dann in g_ftp bzw.
+ * wird vom Aufrufer generisch gemeldet). on_remote != 0 => Remote-Seite. */
+static int delete_one_entry(int on_remote, PanelEntry *e)
 {
-    char prompt[80];
-    PanelEntry *e;
-    int rc;
-
-    if (g_active == 0) return;
-    e = g_active->selected();
-    if (e == 0 || e->is_parent) { redraw_all(); return; }
-
-    if (e->is_dir)
-        sprintf(prompt, L("Verzeichnis \"%.28s\"\nloeschen?", "Delete directory\n\"%.28s\"?"), e->name);
-    else
-        sprintf(prompt, L("Datei \"%.32s\"\nloeschen?", "Delete file\n\"%.32s\"?"), e->name);
-
-    if (!dlg_confirm(L("Loeschen", "Delete"), prompt)) { redraw_all(); return; }
-
-    if (g_active == (Panel *)&g_right) {
-        if (!g_ftp.is_connected()) {
-            dlg_error(L("Loeschen", "Delete"),
-                      L("Keine FTP-Verbindung.\nMit F2 zuerst verbinden.",
-                        "No FTP connection.\nConnect with F2 first."));
-            redraw_all(); return;
-        }
-        rc = e->is_dir ? g_ftp.remove_dir(e->name) : g_ftp.remove_file(e->name);
-        if (rc != FTP_OK)
-            dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"), g_ftp.last_error());
-        else
-            g_right.refresh();
+    if (on_remote) {
+        return e->is_dir ? g_ftp.remove_dir(e->name) : g_ftp.remove_file(e->name);
     } else {
         char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
         join_local(path, (int)sizeof(path), g_left.path(), e->name);
-        if (e->is_dir) {
-            if (_rmdir(path) != 0)
-                dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"),
-                          L("Verzeichnis nicht leer\noder kein Zugriff.",
-                            "Directory not empty\nor access denied."));
-            else
-                g_left.refresh();
-        } else {
-            if (remove(path) != 0)
-                dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"),
-                          L("Datei konnte nicht\ngeloescht werden.",
-                            "Could not delete\nthe file."));
-            else
-                g_left.refresh();
+        if (e->is_dir) return (_rmdir(path) == 0) ? 0 : -1;
+        return (remove(path) == 0) ? 0 : -1;
+    }
+}
+
+/* Einen Eintrag rekursiv loeschen (Datei oder ganzer Verzeichnisbaum).
+ * Rueckgabe 0 = Erfolg, sonst Fehler. */
+static int delete_one_recursive(int on_remote, PanelEntry *e)
+{
+    if (!e->is_dir) {
+        copy_item(0, e->name, 0);
+        return delete_one_entry(on_remote, e);
+    }
+    if (on_remote)
+        return dircopy_delete_remote(&g_ftp, e->name, copy_item, 0);
+    {
+        char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
+        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        return dircopy_delete_local(path, copy_item, 0);
+    }
+}
+
+/* Zaehlt den Baum eines Eintrags zu *nf/*nd hinzu (Datei = 1 Datei). */
+static void count_one(int on_remote, PanelEntry *e, unsigned *nf, unsigned *nd)
+{
+    if (!e->is_dir) { (*nf)++; return; }
+    if (on_remote) {
+        dircopy_count_remote(&g_ftp, e->name, nf, nd);
+    } else {
+        char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
+        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        dircopy_count_local(path, nf, nd);
+    }
+}
+
+static void do_delete(void)
+{
+    char        prompt[140];
+    PanelEntry *cur;
+    int         on_remote, nmarked, i, errors;
+    unsigned    nfiles = 0, ndirs = 0;
+
+    if (g_active == 0) return;
+    on_remote = (g_active == (Panel *)&g_right);
+
+    if (on_remote && !g_ftp.is_connected()) {
+        dlg_error(L("Loeschen", "Delete"),
+                  L("Keine FTP-Verbindung.\nMit F2 zuerst verbinden.",
+                    "No FTP connection.\nConnect with F2 first."));
+        redraw_all(); return;
+    }
+
+    nmarked = g_active->marked_count();
+    cur     = g_active->selected();
+
+    /* --- Komfortpfad: einzelne Datei (kein Baum) --- */
+    if (nmarked == 0) {
+        if (cur == 0 || cur->is_parent) { redraw_all(); return; }
+        if (!cur->is_dir) {
+            sprintf(prompt, L("Datei \"%.32s\"\nloeschen?",
+                              "Delete file\n\"%.32s\"?"), cur->name);
+            if (!dlg_confirm(L("Loeschen", "Delete"), prompt)) { redraw_all(); return; }
+            if (delete_one_entry(on_remote, cur) != 0) {
+                if (on_remote)
+                    dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"), g_ftp.last_error());
+                else
+                    dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"),
+                              L("Datei konnte nicht\ngeloescht werden.",
+                                "Could not delete\nthe file."));
+            } else {
+                if (on_remote) g_right.refresh(); else g_left.refresh();
+            }
+            redraw_all();
+            return;
         }
     }
+
+    /* --- Baum-/Stapel-Loeschung: erst zaehlen, dann warnen --- */
+    flash_status(L(" Ermittle Anzahl ...", " Counting ..."));
+    if (nmarked > 0) {
+        for (i = 0; i < g_active->entry_count(); i++) {
+            PanelEntry *e = g_active->entry_at(i);
+            if (!e || !e->marked || e->is_parent) continue;
+            count_one(on_remote, e, &nfiles, &ndirs);
+        }
+    } else {
+        count_one(on_remote, cur, &nfiles, &ndirs);   /* einzelnes Verzeichnis */
+    }
+
+    sprintf(prompt, L("%u Datei(en) und %u Verzeichnis(se)\nunwiderruflich loeschen?",
+                      "Permanently delete\n%u file(s) and %u director(y/ies)?"),
+            nfiles, ndirs);
+    if (!dlg_confirm(L("Loeschen", "Delete"), prompt)) { redraw_all(); return; }
+
+    redraw_all();
+    dlg_progress_begin(L("Loeschen", "Delete"), "");
+
+    errors = 0;
+    if (nmarked > 0) {
+        for (i = 0; i < g_active->entry_count(); i++) {
+            PanelEntry *e = g_active->entry_at(i);
+            if (!e || !e->marked || e->is_parent) continue;
+            if (delete_one_recursive(on_remote, e) != 0) errors++;
+        }
+    } else {
+        if (delete_one_recursive(on_remote, cur) != 0) errors++;
+    }
+
+    dlg_progress_end();
+
+    g_active->clear_marks();
+    if (on_remote) g_right.refresh(); else g_left.refresh();
+    if (errors)
+        dlg_error(L("Loeschen", "Delete"),
+                  L("Einige Eintraege konnten nicht\nvollstaendig geloescht werden.",
+                    "Some items could not be\nfully deleted."));
     redraw_all();
 }
 
@@ -538,14 +771,91 @@ static void do_rename(void)
 }
 
 /* -------------------------------------------------------------------------
+ * F9 - Lokales Laufwerk wechseln
+ * Nur fuer das lokale Panel sinnvoll (FTP-Seite hat keine Laufwerke). Es
+ * werden ausschliesslich vorhandene Laufwerke angeboten.
+ * ---------------------------------------------------------------------- */
+
+/* 1, falls Laufwerk 'd' (1=A, 2=B, ...) existiert. INT 21h/AX=4409h
+ * ("ist Block-Geraet remote?") liefert bei ungueltigem Laufwerk Carry. */
+static int drive_present(int d)
+{
+    union REGS r;
+    r.x.ax = 0x4409;
+    r.h.bl = (unsigned char)d;
+    int86(0x21, &r, &r);
+    return r.x.cflag ? 0 : 1;
+}
+
+static void do_drives(void)
+{
+    char        labels[26][4];
+    const char *items[26];
+    int         letters[26];
+    int         n = 0, d, cur, initial, sel, newd;
+
+    for (d = 1; d <= 26; d++) {
+        if (drive_present(d)) {
+            sprintf(labels[n], "%c:", 'A' + d - 1);
+            items[n]   = labels[n];
+            letters[n] = d;
+            n++;
+        }
+    }
+    if (n == 0) {
+        dlg_error(L("Laufwerk", "Drive"),
+                  L("Keine Laufwerke gefunden.", "No drives found."));
+        redraw_all(); return;
+    }
+
+    cur = _getdrive();                 /* aktuelles Laufwerk (1=A) */
+    initial = 0;
+    { int i; for (i = 0; i < n; i++) if (letters[i] == cur) initial = i; }
+
+    sel = dlg_menu(L("Laufwerk waehlen", "Select Drive"), items, n, initial);
+    if (sel < 0) { redraw_all(); return; }
+
+    newd = letters[sel];
+    if (newd != cur) {
+        char test[PANEL_HEADER_MAX];
+        _chdrive(newd);
+        /* getcwd schlaegt fehl, wenn das Laufwerk nicht bereit ist (leere
+         * Diskette). Der Harderr-Handler verhindert die DOS-Abfrage. */
+        if (getcwd(test, sizeof(test)) == 0) {
+            _chdrive(cur);             /* zurueck auf das alte Laufwerk */
+            dlg_error(L("Laufwerk", "Drive"),
+                      L("Laufwerk nicht bereit.", "Drive not ready."));
+            redraw_all(); return;
+        }
+        g_left.refresh();
+    }
+    set_active((Panel *)&g_left);      /* Laufwerkswechsel betrifft das lokale Panel */
+    redraw_all();
+}
+
+/* -------------------------------------------------------------------------
  * Main / Event-Loop
  * ---------------------------------------------------------------------- */
-int main(void)
+int main(int argc, char *argv[])
 {
     int running = 1;
+    int i;
 
     /* Sprache aus der DOS-Laendereinstellung bestimmen (vor jeder Ausgabe). */
     i18n_init();
+
+    /* Kommandozeile: "EN", "/EN" oder "-EN" erzwingt Englisch. */
+    for (i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (*a == '/' || *a == '-') a++;
+        if (a[0] == 'e' || a[0] == 'E')
+            if (a[1] == 'n' || a[1] == 'N')
+                if (a[2] == '\0') { g_english = 1; break; }
+    }
+
+    /* Kritische DOS-Fehler (leeres Laufwerk usw.) automatisch fehlschlagen
+     * lassen, statt die TUI mit "Abort, Retry, Fail?" zu zerstoeren. */
+    _harderr(ncftp_harderr);
 
     /* mTCP-Stack VOR tui_init starten: parseEnv/initStack koennen bei Fehler
      * auf stderr schreiben - tui_init loescht den Schirm anschliessend. Schlaegt
@@ -583,6 +893,9 @@ int main(void)
         case KEY_HOME: g_active->move_home(); g_active->draw(); draw_statusbar(); break;
         case KEY_END:  g_active->move_end();  g_active->draw(); draw_statusbar(); break;
 
+        case KEY_INS:  /* Markierung umschalten + Cursor nach unten (Norton-Stil) */
+            g_active->toggle_mark(); g_active->draw(); draw_statusbar(); break;
+
         case KEY_ENTER:
             if (g_active->enter_selected()) {
                 g_active->draw();
@@ -609,19 +922,19 @@ int main(void)
             dlg_message(L("Hilfe", "Help"),
                 L("Tab        Panel wechseln\n"
                   "Pfeile     Auswahl bewegen\n"
-                  "Bild auf/ab  Seitenweise\n"
+                  "Einfg      Eintrag markieren (mehrere kopieren/loeschen)\n"
                   "Enter      Verzeichnis betreten / Datei anzeigen\n"
                   "Backspace  Uebergeordnetes Verzeichnis\n"
-                  "F2 Verbinden  F3 Anzeigen  F5 Kopieren\n"
-                  "F6 Umbenennen  F7 MkDir  F8 Loeschen\n"
+                  "F2 Verbinden  F3 Anzeigen  F5 Kopieren (rekursiv)\n"
+                  "F6 Umbenennen  F7 MkDir  F8 Loeschen  F9 Laufwerk\n"
                   "F10        Beenden",
                   "Tab        Switch panel\n"
                   "Arrows     Move selection\n"
-                  "PgUp/PgDn  Page up / down\n"
+                  "Insert     Mark item (copy/delete several)\n"
                   "Enter      Enter directory / view file\n"
                   "Backspace  Parent directory\n"
-                  "F2 Connect  F3 View  F5 Copy\n"
-                  "F6 Rename  F7 MkDir  F8 Delete\n"
+                  "F2 Connect  F3 View  F5 Copy (recursive)\n"
+                  "F6 Rename  F7 MkDir  F8 Delete  F9 Drive\n"
                   "F10        Quit"), 0);
             break;
         case KEY_F2:  do_connect(); break;
@@ -631,7 +944,7 @@ int main(void)
         case KEY_F6:  do_rename(); break;
         case KEY_F7:  do_mkdir(); break;
         case KEY_F8:  do_delete(); break;
-        case KEY_F9:  flash_status(L(" F9  Menue - folgt spaeter", " F9  Menu - coming later")); break;
+        case KEY_F9:  do_drives(); break;
 
         case KEY_F10:
             if (dlg_confirm(L("Beenden", "Quit"),

@@ -20,6 +20,8 @@
 /* ---- Farb-Attribute (DOS attribute bytes), vgl. CLAUDE.md ---- */
 #define ATTR_PANEL      0x1F  /* weiss auf blau   (Panelinhalt)        */
 #define ATTR_SELECTED   0x30  /* schwarz auf cyan (Cursor-Zeile)       */
+#define ATTR_MARKED     0x1E  /* gelb auf blau    (markierter Eintrag) */
+#define ATTR_MARKED_SEL 0x3E  /* gelb auf cyan    (markiert + Cursor)  */
 #define ATTR_HEADER     0x30  /* schwarz auf cyan (Pfad-Header)        */
 #define ATTR_BORDER     0x1F  /* weiss auf blau   (Rahmen)             */
 #define ATTR_MENUBAR    0x70  /* schwarz auf hellgrau                  */
