@@ -1,0 +1,17 @@
+# mTCP - externe Abhaengigkeit, wird per git clone geholt
+# (siehe CLAUDE.md: git clone https://github.com/retrohun/mTCP mtcp)
+mtcp/
+
+# Compiler-Zwischenergebnisse
+src/*.obj
+*.obj
+
+# Build-Artefakte
+*.EXE
+*.MAP
+*.exe
+*.map
+
+# Watcom temporaere Dateien
+*.ERR
+*.err
