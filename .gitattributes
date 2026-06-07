@@ -1,0 +1,3 @@
+# Einheitlich LF im Repository (verhindert CRLF-Warnungen)
+* text=auto eol=lf
+*.bat text eol=crlf

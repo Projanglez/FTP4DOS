@@ -1,0 +1,217 @@
+/* =============================================================================
+ * panel.cpp - Abstrakte Panel-Basisklasse: Navigation & Rendering
+ * -----------------------------------------------------------------------------
+ * Spaltenlayout im 38 Zeichen breiten Innenbereich (40-Spalten-Panel):
+ *
+ *   Sp.0          : Markierungsspalte (reserviert)
+ *   Name          : links, abgeschnitten
+ *   Groesse/<DIR> : rechtsbuendig
+ *   Datum MM-TT-JJ: rechtsbuendig am rechten Rand
+ *
+ * Spaltenbreiten werden aus der tatsaechlichen Innenbreite berechnet, damit
+ * das Layout auch bei abweichender Panelbreite stimmt.
+ * ===========================================================================*/
+#include <string.h>
+#include <stdio.h>
+
+#include "panel.h"
+#include "tui.h"
+
+/* -------------------------------------------------------------------------
+ * Spaltenlayout
+ * ---------------------------------------------------------------------- */
+struct ColLayout {
+    int name_off, name_w;
+    int size_off, size_w;
+    int date_off, date_w;
+};
+
+static void columns(int inner, ColLayout *c)
+{
+    c->date_w   = 8;                                /* "MM-TT-JJ"            */
+    c->date_off = inner - c->date_w;
+    c->size_w   = 10;                               /* bis 10 Stellen / <DIR>*/
+    c->size_off = c->date_off - 1 - c->size_w;
+    c->name_off = 1;                                /* Sp.0 = Markierung     */
+    c->name_w   = c->size_off - 1 - c->name_off;
+    if (c->name_w < 1) c->name_w = 1;               /* Schutz fuer Mini-Panel*/
+}
+
+/* Text in 'out' an Offset 'off' platzieren, links- oder rechtsbuendig in der
+ * Breite 'w'. Schreibt KEINE NUL (Felder liegen direkt aneinander). */
+static void place(char *out, int off, const char *s, int w, int rightalign)
+{
+    int len = 0;
+    int start, i;
+
+    while (s[len] != '\0') len++;
+    if (len > w) len = w;                           /* abschneiden           */
+
+    start = rightalign ? (off + (w - len)) : off;
+    for (i = 0; i < len; i++)
+        out[start + i] = s[i];
+}
+
+/* -------------------------------------------------------------------------
+ * Konstruktor / Destruktor / Geometrie
+ * ---------------------------------------------------------------------- */
+Panel::Panel()
+{
+    top = 1; left = 0; height = 21; width = 40;
+    count = 0; cursor = 0; topentry = 0; active = 0;
+    header[0] = '\0';
+}
+
+Panel::~Panel()
+{
+}
+
+void Panel::set_region(int top_, int left_, int height_, int width_)
+{
+    top = top_; left = left_; height = height_; width = width_;
+}
+
+unsigned char Panel::frame_attr() const
+{
+    return ATTR_BORDER;
+}
+
+/* Default-Aktionen: wirkungslos. Unterklassen ueberschreiben. */
+int  Panel::enter_selected() { return 0; }
+void Panel::go_parent()      { }
+
+/* -------------------------------------------------------------------------
+ * Navigation
+ * ---------------------------------------------------------------------- */
+int Panel::visible_rows() const
+{
+    /* Aufbau: oben Rahmen + Pfad + Trenner + Spaltenkopf, unten Rahmen. */
+    return (height > 5) ? (height - 5) : 0;
+}
+
+void Panel::clamp_scroll()
+{
+    int vr = visible_rows();
+
+    if (count <= 0) { cursor = 0; topentry = 0; return; }
+
+    if (cursor < 0)        cursor = 0;
+    if (cursor >= count)   cursor = count - 1;
+
+    if (cursor < topentry)            topentry = cursor;
+    if (cursor >= topentry + vr)      topentry = cursor - vr + 1;
+    if (topentry < 0)                 topentry = 0;
+    if (topentry > count - vr)        topentry = count - vr;
+    if (topentry < 0)                 topentry = 0;   /* count < vr */
+}
+
+void Panel::move_up()    { cursor--;                clamp_scroll(); }
+void Panel::move_down()  { cursor++;                clamp_scroll(); }
+void Panel::page_up()    { cursor -= visible_rows();clamp_scroll(); }
+void Panel::page_down()  { cursor += visible_rows();clamp_scroll(); }
+void Panel::move_home()  { cursor = 0;  topentry = 0; clamp_scroll(); }
+void Panel::move_end()   { cursor = count - 1;        clamp_scroll(); }
+
+PanelEntry *Panel::selected()
+{
+    if (cursor < 0 || cursor >= count) return 0;
+    return &entries[cursor];
+}
+
+/* -------------------------------------------------------------------------
+ * Eintrag formatieren
+ * ---------------------------------------------------------------------- */
+void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
+{
+    ColLayout c;
+    int i;
+    char tmp[16];
+
+    columns(inner, &c);
+
+    for (i = 0; i < inner; i++) out[i] = ' ';
+    out[inner] = '\0';
+
+    /* Name (links). */
+    place(out, c.name_off, e->name, c.name_w, 0);
+
+    /* Groesse oder <DIR> (rechts). */
+    if (e->is_dir) {
+        place(out, c.size_off, "<DIR>", c.size_w, 1);
+    } else {
+        sprintf(tmp, "%lu", e->size);
+        place(out, c.size_off, tmp, c.size_w, 1);
+    }
+
+    /* Datum MM-TT-JJ (rechts). Beim ".."-Eintrag leer lassen. */
+    if (!e->is_parent) {
+        int year  = 1980 + (int)(e->date >> 9);
+        int month = (int)((e->date >> 5) & 0x0F);
+        int day   = (int)(e->date & 0x1F);
+        sprintf(tmp, "%02d-%02d-%02d", month, day, year % 100);
+        place(out, c.date_off, tmp, c.date_w, 1);
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Zeichnen
+ * ---------------------------------------------------------------------- */
+void Panel::draw()
+{
+    int inner = width - 2;
+    unsigned char fa = frame_attr();
+    unsigned char ha = active ? ATTR_HEADER : ATTR_PANEL;
+    int vr = visible_rows();
+    int i;
+    char buf[PANEL_HEADER_MAX];
+
+    if (inner < 1) return;
+
+    /* 1) Gesamte Panelflaeche in Panelfarbe loeschen. */
+    fill_rect(top, left, height, width, ' ', ATTR_PANEL);
+
+    /* 2) Doppelrahmen + Trennlinie unter dem Pfad-Header. */
+    draw_box(top, left, height, width, fa, 1);
+    draw_hsep(top + 2, left, width, fa, 1);
+
+    /* 3) Pfad-Header (Zeile top+1), zentriert. Bei Ueberlaenge das Ende zeigen. */
+    {
+        const char far *h = header;
+        const char far *p = h;
+        int len = 0, pad;
+        while (h[len] != '\0') len++;
+        if (len > inner) { p = h + (len - inner); len = inner; }
+        pad = (inner - len) / 2;
+        fill_rect(top + 1, left + 1, 1, inner, ' ', ha);
+        draw_text(top + 1, left + 1 + pad, p, ha, len);
+    }
+
+    /* 4) Spaltenkopf (Zeile top+3). */
+    {
+        ColLayout c;
+        columns(inner, &c);
+        for (i = 0; i < inner; i++) buf[i] = ' ';
+        buf[inner] = '\0';
+        place(buf, c.name_off, "Name", c.name_w, 0);
+        place(buf, c.size_off, "Groesse", c.size_w, 1);
+        place(buf, c.date_off, "Datum", c.date_w, 1);
+        fill_rect(top + 3, left + 1, 1, inner, ' ', ATTR_PANEL);
+        draw_text(top + 3, left + 1, buf, ATTR_PANEL, inner);
+    }
+
+    /* 5) Eintraege (Zeilen top+4 .. top+height-2). */
+    for (i = 0; i < vr; i++) {
+        int row = top + 4 + i;
+        int idx = topentry + i;
+        unsigned char a;
+
+        if (idx < count) {
+            a = (active && idx == cursor) ? ATTR_SELECTED : ATTR_PANEL;
+            fill_rect(row, left + 1, 1, inner, ' ', a);
+            format_entry(&entries[idx], buf, inner);
+            draw_text(row, left + 1, buf, a, inner);
+        } else {
+            fill_rect(row, left + 1, 1, inner, ' ', ATTR_PANEL);
+        }
+    }
+}
