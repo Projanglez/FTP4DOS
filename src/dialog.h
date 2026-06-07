@@ -38,4 +38,21 @@ void dlg_progress_begin(const char *title, const char *fromname);
 void dlg_progress_update(unsigned long sofar, unsigned long total);
 void dlg_progress_end(void);
 
+/* Den angezeigten Dateinamen waehrend eines laufenden Fortschrittsdialogs
+ * wechseln (fuer Stapel-/rekursive Kopiervorgaenge). Setzt den Balken auf 0%
+ * zurueck. Wirkungslos, wenn kein Fortschrittsdialog offen ist. */
+void dlg_progress_setfile(const char *name);
+
+/* Vertikales Auswahlmenue (modal). Zeigt 'count' Eintraege, anfangs ist
+ * 'initial' hervorgehoben. Pfeile/Pos1/Ende bewegen, Enter waehlt, Esc bricht
+ * ab; ein Buchstabe springt direkt zum ersten Eintrag mit diesem Anfangs-
+ * zeichen und waehlt ihn. Rueckgabe: gewaehlter Index 0..count-1 oder -1. */
+int dlg_menu(const char *title, const char *const *items, int count, int initial);
+
+/* Auswahldialog: mehrzeilige Nachricht 'msg' oben, darunter eine vertikale
+ * Liste von 'count' Optionen. Pfeile bewegen, Enter waehlt, Esc bricht ab.
+ * Rueckgabe: gewaehlter Optionsindex 0..count-1, oder -1 bei Esc. */
+int dlg_choice(const char *title, const char *msg,
+               const char *const *items, int count);
+
 #endif /* DIALOG_H */

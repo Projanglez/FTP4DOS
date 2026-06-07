@@ -29,6 +29,7 @@ struct PanelEntry {
     unsigned      time;       /* DOS-Zeitwort  (Bits: HHHHH MMMMMM SSSSS)     */
     unsigned char is_dir;     /* 1 = Verzeichnis                              */
     unsigned char is_parent;  /* 1 = ".."-Eintrag (sortiert immer zuerst)     */
+    unsigned char marked;     /* 1 = vom Benutzer markiert (Einfg-Taste)      */
 };
 
 class Panel {
@@ -69,6 +70,17 @@ public:
     PanelEntry *selected();
     int         selected_index() const { return cursor; }
     int         entry_count()    const { return count; }
+
+    /* Eintrag per Index (0 ausserhalb des gueltigen Bereichs). */
+    PanelEntry *entry_at(int i);
+
+    /* --- Mehrfachauswahl (Norton-Commander-Manier, Einfg-Taste) --- */
+    /* Markierung des aktuellen Eintrags umschalten und Cursor nach unten.
+     * Der ".."-Eintrag laesst sich nicht markieren. */
+    void          toggle_mark();
+    void          clear_marks();
+    int           marked_count() const;   /* Anzahl markierter Eintraege      */
+    unsigned long marked_size()  const;   /* Summe der Groessen (nur Dateien) */
 
     /* 1, falls ein Eintrag mit diesem Namen existiert (".." ausgenommen),
      * case-insensitiv. Fuer die Ueberschreiben-Abfrage beim Upload. */
