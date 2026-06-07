@@ -13,9 +13,11 @@
  * ===========================================================================*/
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #include "panel.h"
 #include "tui.h"
+#include "i18n.h"
 
 /* -------------------------------------------------------------------------
  * Spaltenlayout
@@ -118,6 +120,17 @@ PanelEntry *Panel::selected()
     return &entries[cursor];
 }
 
+int Panel::has_entry(const char *name) const
+{
+    int i;
+    if (name == 0 || name[0] == '\0') return 0;
+    for (i = 0; i < count; i++) {
+        if (entries[i].is_parent) continue;
+        if (stricmp(entries[i].name, name) == 0) return 1;
+    }
+    return 0;
+}
+
 /* -------------------------------------------------------------------------
  * Eintrag formatieren
  * ---------------------------------------------------------------------- */
@@ -126,14 +139,20 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
     ColLayout c;
     int i;
     char tmp[16];
+    char dispname[PANEL_NAME_MAX];
 
     columns(inner, &c);
 
     for (i = 0; i < inner; i++) out[i] = ' ';
     out[inner] = '\0';
 
-    /* Name (links). */
-    place(out, c.name_off, e->name, c.name_w, 0);
+    /* Name: Verzeichnisse GROSSBUCHSTABEN, Dateien kleinbuchstaben. */
+    for (i = 0; e->name[i] && i < PANEL_NAME_MAX - 1; i++)
+        dispname[i] = (char)(e->is_dir
+                             ? toupper((unsigned char)e->name[i])
+                             : tolower((unsigned char)e->name[i]));
+    dispname[i] = '\0';
+    place(out, c.name_off, dispname, c.name_w, 0);
 
     /* Groesse oder <DIR> (rechts). */
     if (e->is_dir) {
@@ -192,9 +211,9 @@ void Panel::draw()
         columns(inner, &c);
         for (i = 0; i < inner; i++) buf[i] = ' ';
         buf[inner] = '\0';
-        place(buf, c.name_off, "Name", c.name_w, 0);
-        place(buf, c.size_off, "Groesse", c.size_w, 1);
-        place(buf, c.date_off, "Datum", c.date_w, 1);
+        place(buf, c.name_off, L("Name", "Name"), c.name_w, 0);
+        place(buf, c.size_off, L("Groesse", "Size"), c.size_w, 1);
+        place(buf, c.date_off, L("Datum", "Date"), c.date_w, 1);
         fill_rect(top + 3, left + 1, 1, inner, ' ', ATTR_PANEL);
         draw_text(top + 3, left + 1, buf, ATTR_PANEL, inner);
     }

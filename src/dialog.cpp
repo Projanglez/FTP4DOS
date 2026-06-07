@@ -9,6 +9,7 @@
 #include "dialog.h"
 #include "tui.h"
 #include "keymap.h"
+#include "i18n.h"
 
 /* Puffer fuer den gesicherten Bildschirm hinter dem Dialog (4000 Bytes). */
 static unsigned char dlg_screen[SCREEN_CELLS * 2];
@@ -152,9 +153,11 @@ int dlg_confirm(const char *title, const char *msg)
     int focus = 1;                   /* Default: "Nein" (sicherer) */
     int result;
     unsigned char bg = ATTR_DIALOG_BG;
+    const char *lbl_yes = L("Ja", "Yes");
+    const char *lbl_no  = L("Nein", "No");
 
-    bw_ja   = button_width("Ja");
-    bw_nein = button_width("Nein");
+    bw_ja   = button_width(lbl_yes);
+    bw_nein = button_width(lbl_no);
     btotal  = bw_ja + gap + bw_nein;
 
     if (title) { int t = (int)strlen(title); if (t > w) w = t; }
@@ -178,13 +181,13 @@ int dlg_confirm(const char *title, const char *msg)
 
     for (;;) {
         int k;
-        draw_button(btnrow, b0, "Ja", focus == 0);
-        draw_button(btnrow, b0 + bw_ja + gap, "Nein", focus == 1);
+        draw_button(btnrow, b0, lbl_yes, focus == 0);
+        draw_button(btnrow, b0 + bw_ja + gap, lbl_no, focus == 1);
 
         k = readkey();
         if (k == KEY_LEFT || k == KEY_RIGHT || k == KEY_TAB) {
             focus = !focus;
-        } else if (k == 'j' || k == 'J') {
+        } else if (k == 'j' || k == 'J' || k == 'y' || k == 'Y') {
             result = 1; break;
         } else if (k == 'n' || k == 'N' || k == KEY_ESC) {
             result = 0; break;
@@ -202,7 +205,7 @@ int dlg_confirm(const char *title, const char *msg)
 int dlg_input(const char *title, const char *prompt,
               char *buf, int maxlen, int is_password)
 {
-    static const char *hint = "[Enter] OK   [Esc] Abbruch";
+    const char *hint = L("[Enter] OK   [Esc] Abbruch", "[Enter] OK   [Esc] Cancel");
     int promptlen = prompt ? (int)strlen(prompt) : 0;
     int hintlen   = (int)strlen(hint);
     int fieldw, w, cols, rows, top, left, frow, fcol;
@@ -318,7 +321,7 @@ void dlg_progress_begin(const char *title, const char *fromname)
     save_screen(dlg_screen);
     draw_dialog_frame(prog_top, prog_left, prog_rows, prog_cols, title, bg);
 
-    sprintf(buf, "Datei: %.34s", fromname ? fromname : "");
+    sprintf(buf, L("Datei: %.34s", "File: %.34s"), fromname ? fromname : "");
     draw_text(prog_top + 1, prog_left + 2, buf, bg, prog_cols - 4);
     prog_draw_bar(0);
 }
@@ -343,7 +346,7 @@ void dlg_progress_update(unsigned long sofar, unsigned long total)
         unsigned long unit = sofar >> 13;
         if (unit == prog_lastunit) return;
         prog_lastunit = unit;
-        sprintf(buf, "%lu Bytes uebertragen ...", sofar);
+        sprintf(buf, L("%lu Bytes uebertragen ...", "%lu bytes transferred ..."), sofar);
         fill_rect(prog_barrow, prog_left + 2, 1, prog_cols - 4, ' ', ATTR_DIALOG_BG);
         draw_text(prog_barrow, prog_left + 2, buf, ATTR_DIALOG_BG, prog_cols - 4);
     }

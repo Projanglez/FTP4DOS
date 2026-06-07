@@ -70,6 +70,10 @@ public:
     int         selected_index() const { return cursor; }
     int         entry_count()    const { return count; }
 
+    /* 1, falls ein Eintrag mit diesem Namen existiert (".." ausgenommen),
+     * case-insensitiv. Fuer die Ueberschreiben-Abfrage beim Upload. */
+    int         has_entry(const char *name) const;
+
     /* Titel-/Pfadzeile des Panels (lokal: Verzeichnis, remote: FTP-Pfad). */
     const char *title() const { return header; }
 

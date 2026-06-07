@@ -53,7 +53,9 @@ APP_OBJS = &
     src\lpanel.obj &
     src\rpanel.obj &
     src\ftpcli.obj &
-    src\dialog.obj
+    src\dialog.obj &
+    src\viewer.obj &
+    src\i18n.obj
 
 # -----------------------------------------------------------------------------
 # mTCP-Kern-Objekte (aus TCPLIB/)
@@ -95,25 +97,31 @@ $(TARGET): $(ALL_OBJS)
 # -----------------------------------------------------------------------------
 # -zt256: grosse Panel-Globals (g_left/g_right, ~25 KB je) in FAR-Datensegmente
 # legen, damit DGROUP (64 KB, large model) nicht ueberlaeuft.
-src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h
+src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h src\viewer.h src\i18n.h
     $(CPP) $(CFLAGS) -zt256 $(INCPATH) -fo=$@ $[@
 
 src\tui.obj: src\tui.cpp src\tui.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\panel.obj: src\panel.cpp src\panel.h src\tui.h
+src\panel.obj: src\panel.cpp src\panel.h src\tui.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\tui.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h
+src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg
+src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg src\i18n.h
     $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
 
-src\dialog.obj: src\dialog.cpp src\dialog.h src\tui.h src\keymap.h
+src\dialog.obj: src\dialog.cpp src\dialog.h src\tui.h src\keymap.h src\i18n.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\viewer.obj: src\viewer.cpp src\viewer.h src\tui.h src\keymap.h src\dialog.h src\i18n.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\i18n.obj: src\i18n.cpp src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 # -----------------------------------------------------------------------------
