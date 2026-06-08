@@ -88,7 +88,11 @@ public:
     /* Markierung des aktuellen Eintrags umschalten und Cursor nach unten.
      * Der ".."-Eintrag laesst sich nicht markieren. */
     void          toggle_mark();
-    void          invert_marks(); /* Numpad *: alle Markierungen invertieren       */
+    void          invert_marks();  /* Numpad *: alle Markierungen invertieren      */
+    /* Numpad +: im aktiven Panel alle Eintraege markieren, die in `other` nicht
+     * vorhanden sind (Name, case-insensitiv) oder dort mit anderer Groesse
+     * vorkommen (nur Dateien). Ist `other` leer/null: alles markieren. */
+    void          compare_mark(const Panel *other);
     void          clear_marks();
     int           marked_count()     const; /* Anzahl markierter Eintraege      */
     unsigned long marked_size()      const; /* Summe der Groessen (nur Dateien) */
@@ -102,6 +106,9 @@ public:
     const char *title() const { return header; }
 
 protected:
+    /* Index des Eintrags mit diesem Namen (-1 = nicht gefunden, case-insensitiv).
+     * Interner Helfer fuer has_entry und compare_mark. */
+    int         find_entry(const char *name) const;
     /* --- Bildschirmregion --- */
     int top, left, height, width;
 

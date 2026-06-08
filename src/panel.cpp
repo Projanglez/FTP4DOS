@@ -248,15 +248,38 @@ int Panel::marked_dir_count() const
     return n;
 }
 
-int Panel::has_entry(const char *name) const
+int Panel::find_entry(const char *name) const
 {
     int i;
-    if (name == 0 || name[0] == '\0') return 0;
+    if (name == 0 || name[0] == '\0') return -1;
     for (i = 0; i < count; i++) {
         if (entries[i].is_parent) continue;
-        if (stricmp(entries[i].name, name) == 0) return 1;
+        if (stricmp(entries[i].name, name) == 0) return i;
     }
-    return 0;
+    return -1;
+}
+
+int Panel::has_entry(const char *name) const
+{
+    return find_entry(name) >= 0;
+}
+
+void Panel::compare_mark(const Panel *other)
+{
+    int i;
+    int other_empty = (other == 0 || other->count == 0);
+    for (i = 0; i < count; i++) {
+        PanelEntry *e = &entries[i];
+        if (e->is_parent) continue;
+        if (other_empty) { e->marked = 1; continue; }
+        int idx = other->find_entry(e->name);
+        if (idx < 0) {
+            e->marked = 1;
+        } else if (!e->is_dir && other->entries[idx].size != e->size) {
+            e->marked = 1;
+        }
+    }
+    draw();
 }
 
 /* -------------------------------------------------------------------------

@@ -1150,6 +1150,14 @@ int main(int argc, char *argv[])
             g_active->toggle_mark(); draw_statusbar(); break;
         case KEY_STAR: /* Numpad *: alle Markierungen invertieren (NC-Stil) */
             g_active->invert_marks(); draw_statusbar(); break;
+        case KEY_PLUS: { /* Numpad +: fehlende/abweichende Dateien markieren */
+            const Panel *other = (g_active == (Panel *)&g_left)
+                                 ? (const Panel *)&g_right
+                                 : (const Panel *)&g_left;
+            g_active->compare_mark(other);
+            draw_statusbar();
+            break;
+        }
 
         case KEY_ENTER:
             if (g_active->enter_selected()) {
@@ -1176,18 +1184,18 @@ int main(int argc, char *argv[])
         case KEY_F1:
             dlg_message(L("Hilfe", "Help"),
                 L("Tab        Panel wechseln\n"
-                  "Pfeile     Auswahl bewegen\n"
                   "Einfg      Eintrag markieren (mehrere kopieren/l" oe "schen)\n"
                   "*          Markierung invertieren\n"
+                  "+          Fehlende/abweichende Dateien gg. anderem Panel markieren\n"
                   "Enter      Verzeichnis betreten / Datei anzeigen\n"
                   "Backspace  " Ue "bergeordnetes Verzeichnis\n"
                   "F2 Verbinden  F3 Anzeigen  F4 Bearbeiten\n"
                   "F5 Kopieren (rekursiv)  F6 Umbenennen\n"
                   "F7 MkDir  F8 L" oe "schen  F9 Laufwerk  F10 Ende",
                   "Tab        Switch panel\n"
-                  "Arrows     Move selection\n"
                   "Insert     Mark item (copy/delete several)\n"
                   "*          Invert selection\n"
+                  "+          Mark files missing or different in other panel\n"
                   "Enter      Enter directory / view file\n"
                   "Backspace  Parent directory\n"
                   "F2 Connect  F3 View  F4 Edit\n"
