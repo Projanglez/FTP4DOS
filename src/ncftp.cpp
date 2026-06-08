@@ -64,9 +64,8 @@ static char g_host[FTP_HOST_MAX] = "";
 static char g_portStr[8]         = "21";
 static char g_user[40]           = "anonymous";
 static char g_pass[40]           = "";
-static int  g_savepw      = 1;   /* Opt-out: Passwort standardmaessig merken   */
-static int  g_saveconn    = 1;   /* Verbindungsdaten ueberhaupt speichern      */
-static int  g_nosave      = 0;   /* -n: diese Sitzung nicht in NCFTP.SAV ablegen*/
+static int  g_savepw      = 1;   /* Passwort mitmerken (0 = nur Host/User)     */
+static int  g_saveconn    = 1;   /* 0 = diese Sitzung nicht in NCFTP.SAV       */
 static int  g_autoconnect = 0;   /* per Kommandozeile (-h) automatisch verbinden*/
 
 /* Kritischer-Fehler-Handler (INT 24h): verhindert die DOS-Abfrage
@@ -321,7 +320,7 @@ static int perform_connect(void)
 
     g_right.refresh();
     set_active((Panel *)&g_right);
-    if (g_saveconn && !g_nosave)
+    if (g_saveconn)
         connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw);
     return FTP_OK;
 }
@@ -985,15 +984,17 @@ static void do_drives(void)
 static void print_usage(void)
 {
     printf("NCFTP386 - Norton Commander style FTP client for DOS\n\n");
-    printf("Usage: NCFTP386 [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]\n");
+    printf("Usage: NCFTP386 [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
-    printf("  /L:EN|DE  force English or German user interface\n");
-    printf("  /H:HOST   connect to HOST automatically on startup\n");
-    printf("  /P:PORT   port (default 21)\n");
-    printf("  /U:USER   user name (default anonymous)\n");
-    printf("  /W:PASS   password  (WARNING: stored in cleartext in the batch file)\n");
-    printf("  /N        do not save this connection to NCFTP386.SAV\n");
-    printf("  /?        this help\n");
+    printf("  /L:EN|DE        force English or German user interface\n");
+    printf("  /H:HOST         connect to HOST automatically on startup\n");
+    printf("  /P:PORT         port (default 21)\n");
+    printf("  /U:USER         user name (default anonymous)\n");
+    printf("  /W:PASS         password  (WARNING: stored in cleartext in the batch file)\n");
+    printf("  /S:ALL          save connection incl. password to NCFTP386.SAV (default)\n");
+    printf("  /S:NOPASS       save connection but not the password\n");
+    printf("  /S:OFF          do not save this connection\n");
+    printf("  /?              this help\n");
 }
 
 /* -------------------------------------------------------------------------
@@ -1018,7 +1019,7 @@ int main(int argc, char *argv[])
      * ist case-insensitiv, der WERT wird unveraendert uebernommen (Passwort und
      * Benutzer bleiben damit Gross-/Kleinschreibung-genau).
      *   /L:DE|EN  Sprache      /H:Host (+Auto-Connect)  /P:Port
-     *   /U:User   /W:Passwort  /N nicht speichern       /? Hilfe */
+     *   /U:User   /W:Passwort  /S:ALL|NOPASS|OFF        /? Hilfe */
     {
         int want_help = 0;
         for (i = 1; i < argc; i++) {
@@ -1049,8 +1050,10 @@ int main(int argc, char *argv[])
             case 'w':
                 strncpy(g_pass, val, sizeof(g_pass) - 1); g_pass[sizeof(g_pass) - 1] = 0;
                 break;
-            case 'n':
-                g_nosave = 1;
+            case 's':
+                if      (stricmp(val, "OFF")    == 0) g_saveconn = 0;
+                else if (stricmp(val, "NOPASS") == 0) { g_saveconn = 1; g_savepw = 0; }
+                else if (stricmp(val, "ALL")    == 0) { g_saveconn = 1; g_savepw = 1; }
                 break;
             case '?':
                 want_help = 1;
