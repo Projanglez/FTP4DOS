@@ -18,12 +18,9 @@ void dlg_message(const char *title, const char *msg, int is_error);
 void dlg_error(const char *title, const char *msg);   /* = dlg_message(...,1)  */
 
 /* Ja/Nein-Abfrage. Rueckgabe: 1 = Ja, 0 = Nein.
- * J/N als Direkttasten, Links/Rechts/Tab wechselt, Enter waehlt, Esc = Nein. */
+ * J/N als Direkttasten, Links/Rechts/Tab wechselt, Enter waehlt, Esc = Nein.
+ * Vorgabe-Fokus liegt auf "Nein". */
 int dlg_confirm(const char *title, const char *msg);
-
-/* Wie dlg_confirm, aber mit waehlbarem Vorgabe-Fokus: default_yes != 0 ->
- * "Ja" ist vorausgewaehlt (fuer Opt-out-Abfragen wie "Passwort speichern?"). */
-int dlg_confirm_def(const char *title, const char *msg, int default_yes);
 
 /* Einzeiliges Eingabefeld (Basis fuer den Verbindungsdialog).
  * buf wird vorbefuellt angezeigt und editiert; maxlen = max. Zeichen (buf muss

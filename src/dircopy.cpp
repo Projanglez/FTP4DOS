@@ -176,6 +176,26 @@ static void dc_on_line(void *vctx, const char *line)
     c->count++;
 }
 
+/* Liste der Unterverzeichnis-Namen einer eingelesenen Ebene kompakt sichern.
+ * Gibt die Anzahl zurueck (0 = keine / Speicherfehler) und legt *out an. */
+static int extract_subdirs(DcCollect *col, char (**out)[PANEL_NAME_MAX])
+{
+    int i, nd = 0, j;
+    *out = 0;
+    for (i = 0; i < col->count; i++) if (col->arr[i].is_dir) nd++;
+    if (nd <= 0) return 0;
+    *out = (char (*)[PANEL_NAME_MAX])malloc((unsigned)nd * PANEL_NAME_MAX);
+    if (!*out) return 0;
+    j = 0;
+    for (i = 0; i < col->count; i++)
+        if (col->arr[i].is_dir) {
+            strncpy((*out)[j], col->arr[i].name, PANEL_NAME_MAX - 1);
+            (*out)[j][PANEL_NAME_MAX - 1] = '\0';
+            j++;
+        }
+    return nd;
+}
+
 static int download_recurse(FtpClient *ftp, const char *remoteDir,
                             const char *localDir, const char *leaf, int depth,
                             DirCopyItemCb itemcb, FtpProgressCb progcb,
@@ -219,19 +239,7 @@ static int download_recurse(FtpClient *ftp, const char *remoteDir,
     }
 
     /* --- 3) Unterverzeichnis-Namen kompakt sichern, grossen Puffer freigeben --- */
-    nd = 0;
-    for (i = 0; i < col.count; i++) if (col.arr[i].is_dir) nd++;
-    if (nd > 0) {
-        dirs = (char (*)[PANEL_NAME_MAX])malloc((unsigned)nd * PANEL_NAME_MAX);
-        if (!dirs) { free(col.arr); return FTP_ERR_LOCALIO; }
-        j = 0;
-        for (i = 0; i < col.count; i++)
-            if (col.arr[i].is_dir) {
-                strncpy(dirs[j], col.arr[i].name, PANEL_NAME_MAX - 1);
-                dirs[j][PANEL_NAME_MAX - 1] = '\0';
-                j++;
-            }
-    }
+    nd = extract_subdirs(&col, &dirs);
     free(col.arr);
 
     /* --- 4) in die Unterverzeichnisse absteigen --- */
@@ -294,26 +302,6 @@ int dircopy_count_local(const char *path, unsigned *nfiles, unsigned *ndirs)
 {
     (*ndirs)++;                          /* das Wurzelverzeichnis selbst */
     return count_local_recurse(path, nfiles, ndirs, 0);
-}
-
-/* Liste der Unterverzeichnis-Namen einer eingelesenen Ebene kompakt sichern.
- * Gibt die Anzahl zurueck (0 = keine / Speicherfehler) und legt *out an. */
-static int extract_subdirs(DcCollect *col, char (**out)[PANEL_NAME_MAX])
-{
-    int i, nd = 0, j;
-    *out = 0;
-    for (i = 0; i < col->count; i++) if (col->arr[i].is_dir) nd++;
-    if (nd <= 0) return 0;
-    *out = (char (*)[PANEL_NAME_MAX])malloc((unsigned)nd * PANEL_NAME_MAX);
-    if (!*out) return 0;
-    j = 0;
-    for (i = 0; i < col->count; i++)
-        if (col->arr[i].is_dir) {
-            strncpy((*out)[j], col->arr[i].name, PANEL_NAME_MAX - 1);
-            (*out)[j][PANEL_NAME_MAX - 1] = '\0';
-            j++;
-        }
-    return nd;
 }
 
 static int count_remote_recurse(FtpClient *ftp, const char *dir,

@@ -34,7 +34,6 @@ public:
     void go_parent();           /* override: CDUP                              */
 
     const char *path() const { return cwd; }
-    int  online() const { return (ftp && ftp->is_connected()) ? 1 : 0; }
 
     /* Letzte Navigations-/Listing-Aktion fehlgeschlagen? + Fehlertext. */
     int         nav_failed() const { return navFailed; }

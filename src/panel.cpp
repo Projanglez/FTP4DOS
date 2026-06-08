@@ -130,9 +130,6 @@ void Panel::clamp_scroll()
     if (topentry < 0)                 topentry = 0;   /* count < vr */
 }
 
-void Panel::move_up()    { cursor--;                clamp_scroll(); }
-void Panel::move_down()  { cursor++;                clamp_scroll(); }
-
 /* Flimmerfreie Cursor-Bewegung: nur die zwei betroffenen Zeilen neu zeichnen,
  * sofern nicht gescrollt wurde (dann ist ein Vollaufbau noetig). */
 void Panel::move_step(int delta)
