@@ -59,4 +59,18 @@ int dlg_menu(const char *title, const char *const *items, int count, int initial
 int dlg_choice(const char *title, const char *msg,
                const char *const *items, int count);
 
+/* FTP-Verbindungsformular in einem einzigen Dialog:
+ * Host/Port/User/Pass-Felder + zwei Speicher-Ankreuzfelder.
+ * Tab/Down/Up navigieren zwischen Feldern; Space/Enter toggelt Checkboxen.
+ * *save_conn und *save_pass werden in/out verwendet (Vorbelegung aus NCFTP.SAV).
+ * Rueckgabe: 1 = Verbinden, 0 = Abbrechen. Bei 0 bleiben *save_conn/*save_pass
+ * unveraendert. */
+int dlg_connect(const char *title,
+                char *host, int host_max,
+                char *port, int port_max,
+                char *user, int user_max,
+                char *pass, int pass_max,
+                int *save_conn,
+                int *save_pass);
+
 #endif /* DIALOG_H */
