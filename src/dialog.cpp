@@ -501,3 +501,186 @@ int dlg_menu(const char *title, const char *const *items, int count, int initial
     restore_screen(dlg_screen);
     return result;
 }
+
+/* -------------------------------------------------------------------------
+ * FTP-Verbindungsformular: Host/Port/User/Pass + Speicher-Checkboxen
+ *
+ * Layout (cols=50, rows=11):
+ *  Row 0:  Rahmen mit Titel
+ *  Row 1:  Host-Feld
+ *  Row 2:  Port-Feld
+ *  Row 3:  User-Feld
+ *  Row 4:  Pass-Feld (maskiert)
+ *  Row 5:  Trennlinie
+ *  Row 6:  [X] Verbindungsdaten speichern
+ *  Row 7:  [ ] Passwort speichern (unsicher)
+ *  Row 8:  Trennlinie
+ *  Row 9:  Buttons [ Verbinden ]  [ Abbrechen ]
+ *  Row 10: Rahmen unten
+ *
+ * Fokus-Reihenfolge: Host(0) Port(1) User(2) Pass(3)
+ *                    chk_save(4) chk_pass(5) btn_ok(6) btn_cancel(7)
+ * Tab/Down vorwaerts, Up rueckwaerts. Space/Enter auf Checkbox toggled.
+ * ---------------------------------------------------------------------- */
+int dlg_connect(const char *title,
+                char *host, int host_max,
+                char *port, int port_max,
+                char *user, int user_max,
+                char *pass, int pass_max,
+                int *save_conn,
+                int *save_pass)
+{
+    int cols   = 50;
+    int rows   = 11;
+    int top    = (SCREEN_ROWS - rows) / 2;
+    int left   = (SCREEN_COLS - cols) / 2;
+    int inner  = cols - 4;          /* nutzbarer Innenbereich                */
+    int fdw    = inner - 6;         /* Feld-Anzeigebreite: inner - "Host: "  */
+    int fcol   = left + 2 + 6;      /* linke Kante der Eingabefelder         */
+    int NFOCUS = 8;
+    int focus  = (host[0] != '\0') ? 6 : 0;  /* vorbelegt: gleich Verbinden */
+
+    /* Textfelder */
+    char *fbufs[4];
+    int   fmaxs[4];
+    int   flens[4];
+    int   frows[4];
+    const char *flbls[4];
+    int   is_pw[4];
+    int i;
+
+    fbufs[0] = host; fmaxs[0] = host_max; frows[0] = top + 1;
+    fbufs[1] = port; fmaxs[1] = port_max; frows[1] = top + 2;
+    fbufs[2] = user; fmaxs[2] = user_max; frows[2] = top + 3;
+    fbufs[3] = pass; fmaxs[3] = pass_max; frows[3] = top + 4;
+
+    flbls[0] = "Host: ";
+    flbls[1] = "Port: ";
+    flbls[2] = L("User: ", "User: ");
+    flbls[3] = L("Pass: ", "Pass: ");
+
+    is_pw[0] = 0; is_pw[1] = 0; is_pw[2] = 0; is_pw[3] = 1;
+
+    for (i = 0; i < 4; i++) {
+        flens[i] = (int)strlen(fbufs[i]);
+        if (flens[i] > fmaxs[i]) { flens[i] = fmaxs[i]; fbufs[i][flens[i]] = '\0'; }
+    }
+
+    /* Checkbox-Zustand (lokal; erst bei OK in *save_conn/*save_pass schreiben) */
+    int chk_save = *save_conn;
+    int chk_pass = *save_pass;
+    if (!chk_save) chk_pass = 0;
+
+    /* Buttons */
+    const char *lbl_ok     = L("Verbinden", "Connect");
+    const char *lbl_cancel = L("Abbrechen", "Cancel");
+    int bw_ok     = button_width(lbl_ok);
+    int bw_cancel = button_width(lbl_cancel);
+    int gap       = 4;
+    int btotal    = bw_ok + gap + bw_cancel;
+    int b0        = left + (cols - btotal) / 2;
+
+    unsigned char bg = ATTR_DIALOG_BG;
+    int result = 0;
+
+    /* Bildschirm sichern und Rahmen zeichnen */
+    save_screen(dlg_screen);
+    draw_dialog_frame(top, left, rows, cols, title, bg);
+
+    /* Statische Labels */
+    for (i = 0; i < 4; i++)
+        draw_text(frows[i], left + 2, flbls[i], bg, 6);
+
+    /* Trennlinien */
+    draw_hsep(top + 5, left, cols, bg, 1);
+    draw_hsep(top + 8, left, cols, bg, 1);
+
+    show_cursor(1);
+
+    for (;;) {
+        int k;
+        char tmp[56];
+
+        /* Textfelder neu zeichnen */
+        for (i = 0; i < 4; i++) {
+            int is_focused = (focus == i);
+            unsigned char fa = is_focused ? ATTR_DIALOG_HL : bg;
+            int len   = flens[i];
+            int caret = len;
+            int start = (caret >= fdw) ? (caret - fdw + 1) : 0;
+            int vis   = len - start;
+            int j;
+            if (vis > fdw) vis = fdw;
+            fill_rect(frows[i], fcol, 1, fdw, ' ', fa);
+            for (j = 0; j < vis; j++) {
+                char c = is_pw[i] ? '*' : fbufs[i][start + j];
+                putchar_at(frows[i], fcol + j, c, fa);
+            }
+            if (is_focused)
+                set_cursor(frows[i], fcol + (caret - start));
+        }
+
+        /* Checkboxen */
+        {
+            unsigned char a4 = (focus == 4) ? ATTR_DIALOG_HL : bg;
+            unsigned char a5 = (focus == 5) ? ATTR_DIALOG_HL : bg;
+            sprintf(tmp, "[%c] %s", chk_save ? 'X' : ' ',
+                    L("Verbindungsdaten speichern", "Save connection data"));
+            fill_rect(top + 6, left + 2, 1, inner, ' ', a4);
+            draw_text(top + 6, left + 2, tmp, a4, inner);
+            sprintf(tmp, "[%c] %s", chk_pass ? 'X' : ' ',
+                    L("Passwort speichern (unsicher)", "Save password (insecure)"));
+            fill_rect(top + 7, left + 2, 1, inner, ' ', a5);
+            draw_text(top + 7, left + 2, tmp, a5, inner);
+        }
+
+        /* Buttons */
+        draw_button(top + 9, b0,               lbl_ok,     focus == 6);
+        draw_button(top + 9, b0 + bw_ok + gap, lbl_cancel, focus == 7);
+
+        k = readkey();
+
+        if (k == KEY_ESC) { result = 0; break; }
+
+        /* Navigation vorwaerts */
+        if (k == KEY_TAB || k == KEY_DOWN)
+        { focus = (focus + 1) % NFOCUS; continue; }
+        /* Navigation rueckwaerts (Up oder Shift+Tab = 0x10F) */
+        if (k == KEY_UP || k == 0x10F)
+        { focus = (focus + NFOCUS - 1) % NFOCUS; continue; }
+
+        /* Fokus-spezifische Eingabe */
+        if (focus >= 0 && focus <= 3) {
+            int fi = focus;
+            if (k == KEY_ENTER) {
+                focus = (focus + 1) % NFOCUS;
+            } else if (k == KEY_BACKSP) {
+                if (flens[fi] > 0) { flens[fi]--; fbufs[fi][flens[fi]] = '\0'; }
+            } else if (k >= 0x20 && k <= 0x7E && flens[fi] < fmaxs[fi]) {
+                fbufs[fi][flens[fi]++] = (char)k;
+                fbufs[fi][flens[fi]]   = '\0';
+            }
+        } else if (focus == 4) {
+            if (k == KEY_ENTER || k == ' ') {
+                chk_save = !chk_save;
+                if (!chk_save) chk_pass = 0;
+            }
+        } else if (focus == 5) {
+            if ((k == KEY_ENTER || k == ' ') && chk_save)
+                chk_pass = !chk_pass;
+        } else if (focus == 6) {
+            if (k == KEY_ENTER) { result = 1; break; }
+        } else { /* focus == 7 */
+            if (k == KEY_ENTER) { result = 0; break; }
+        }
+    }
+
+    show_cursor(0);
+    restore_screen(dlg_screen);
+
+    if (result) {
+        *save_conn = chk_save;
+        *save_pass = chk_pass;
+    }
+    return result;
+}
