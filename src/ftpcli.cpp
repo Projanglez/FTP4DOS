@@ -42,8 +42,12 @@
  * schickt. mTCPs eigene SYN-Wiederholung kommt erst nach ~10s - zu spaet. */
 #define CONNECT_TIMEOUT_MS  5000ul
 #define CONTROL_RECV_SIZE    1024
-#define DATA_RECV_SIZE       4096
-#define DATA_CHUNK           1024
+#define DATA_RECV_SIZE      16384   /* mTCP-Maximum; grosses Empfangsfenster    */
+/* Lese-/Schreibblock fuer Transfers. Beim Download wird der TCP-Empfangspuffer
+ * pro Schleifendurchlauf KOMPLETT geleert (siehe retr()), darum reicht ein
+ * mittlerer Block - er muss nur >= MSS sein, damit wir schneller leeren als der
+ * Server fuellt. */
+#define DATA_CHUNK           4096
 
 
 /* --- Datei-lokaler Zustand ------------------------------------------- */
@@ -67,6 +71,36 @@ static void driveStack(void) {
 static unsigned long elapsedMs(clockTicks_t start) {
     return (unsigned long)Timer_diff(start, TIMER_GET_CURRENT()) * TIMER_TICK_LEN;
 }
+
+/* Datenverbindung 'ds' so weit wie moeglich in 'f' leeren (RETR-Download).
+ * Das Empfangsfenster bleibt so offen; sonst faellt es unter eine MSS, der
+ * Server stoppt (Silly-Window-Vermeidung) und mTCP oeffnet es erst nach seinem
+ * ~5s-Persist-Timer wieder auf. Rueckgabe: >0 Bytes geschrieben (zu *total
+ * addiert), 0 nichts da, -1 Schreibfehler, -2 Verbindung geschlossen. */
+static int drainToFile(TcpSocket *ds, FILE *f, uint8_t *buf, int bufsz,
+                       unsigned long *total) {
+    int16_t n;
+    int wrote = 0;
+    while ((n = ds->recv(buf, (uint16_t)bufsz)) > 0) {
+        if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) return -1;
+        *total += (unsigned long)n;
+        wrote = 1;
+    }
+    if (n < 0) return -2;
+    return wrote;
+}
+
+/* Kontext fuer das Leeren der Datenverbindung WAEHREND readReply() auf die
+ * RETR-"150"-Antwort wartet - so laeuft der Empfangspuffer am Transferstart
+ * nicht voll (sonst einmaliger Stillstand, siehe drainToFile). */
+struct DrainCtx {
+    TcpSocket     *ds;
+    FILE          *f;
+    uint8_t       *buf;
+    int            sz;
+    unsigned long *total;
+    int            err;     /* wird auf 1 gesetzt bei Schreibfehler */
+};
 
 
 /* ===================================================================== */
@@ -170,10 +204,13 @@ int FtpClient::sendCmdArg(const char *cmd, const char *arg) {
 }
 
 /* Liest eine vollstaendige (ggf. mehrzeilige) FTP-Antwort.
-   Rueckgabe: 3-stelliger Code, oder negativer FTP_ERR_* Wert. */
-int FtpClient::readReply(void) {
+   Rueckgabe: 3-stelliger Code, oder negativer FTP_ERR_* Wert.
+   drainCtxv != 0 (nur RETR-"150"): waehrend des Wartens die Datenverbindung
+   leeren, damit ihr Empfangspuffer nicht voll-laeuft. */
+int FtpClient::readReply(void *drainCtxv) {
     TcpSocket *s = (TcpSocket *)ctrl;
     if (!s) return FTP_ERR_PROTO;
+    DrainCtx *dc = (DrainCtx *)drainCtxv;
 
     char line[FTP_LINE_MAX];
     int  len = 0;
@@ -184,6 +221,10 @@ int FtpClient::readReply(void) {
 
     for (;;) {
         driveStack();
+        if (dc) {
+            int dr = drainToFile(dc->ds, dc->f, dc->buf, dc->sz, dc->total);
+            if (dr == -1) dc->err = 1;
+        }
         int16_t n = s->recv(&ch, 1);
 
         if (n > 0) {
@@ -585,37 +626,48 @@ int FtpClient::retr(const char *remote, const char *localpath,
     FILE *f = fopen(localpath, "wb");
     if (!f) { closeData(d); state = FTP_IDLE; setError(L("Lokale Datei nicht anlegbar", "Cannot create local file")); return FTP_ERR_LOCALIO; }
 
-    rc = sendCmdArg("RETR", remote);
-    if (rc != FTP_OK) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return rc; }
-
-    int code = readReply();                 /* 150 / 125 */
-    if (code < 0) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return code; }
-    if (code != 150 && code != 125) {
-        fclose(f); remove(localpath); closeData(d); state = FTP_IDLE;
-        setErrorReply(L("RETR abgelehnt", "RETR refused"));
-        return (code >= 400) ? FTP_ERR_SERVER : FTP_ERR_PROTO;
-    }
-
     TcpSocket *ds = (TcpSocket *)d;
     unsigned long total = 0;
     uint8_t buf[DATA_CHUNK];
     int ioerr = 0;
+    int code;
+
+    rc = sendCmdArg("RETR", remote);
+    if (rc != FTP_OK) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return rc; }
+
+    /* "150/125" lesen UND dabei die Datenverbindung schon leeren: sonst fuellt
+     * der Server den Empfangspuffer waehrend dieses Wartens, das Fenster faellt
+     * unter eine MSS und es kommt zum einmaligen SWS-Stillstand am Start. */
+    {
+        DrainCtx dc;
+        dc.ds = ds; dc.f = f; dc.buf = buf; dc.sz = (int)sizeof(buf);
+        dc.total = &total; dc.err = 0;
+        code = readReply(&dc);               /* 150 / 125 */
+        if (dc.err) ioerr = 1;
+        if (code < 0) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return code; }
+        if (code != 150 && code != 125) {
+            fclose(f); remove(localpath); closeData(d); state = FTP_IDLE;
+            setErrorReply(L("RETR abgelehnt", "RETR refused"));
+            return (code >= 400) ? FTP_ERR_SERVER : FTP_ERR_PROTO;
+        }
+    }
+
     clockTicks_t start = TIMER_GET_CURRENT();
 
-    for (;;) {
+    while (!ioerr) {
+        int dr;
         driveStack();
-        int16_t n = ds->recv(buf, sizeof(buf));
-        if (n > 0) {
+        /* Puffer pro Durchlauf komplett leeren: haelt das TCP-Fenster offen,
+         * damit der Server nicht durch Silly Window Syndrome stoppt. */
+        dr = drainToFile(ds, f, buf, (int)sizeof(buf), &total);
+        if (dr == -1) { ioerr = 1; break; }
+        if (dr > 0) {
             start = TIMER_GET_CURRENT();
-            if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) { ioerr = 1; break; }
-            total += (unsigned long)n;
             if (cb) cb(ctx, total, filesize);
-        } else if (n == 0) {
-            if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
-            if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
-        } else {
-            break;
         }
+        if (dr == -2) break;
+        if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
+        if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
     }
 
     fclose(f);
@@ -667,19 +719,20 @@ int FtpClient::stor(const char *localpath, const char *remote,
     TcpSocket *ds = (TcpSocket *)d;
     unsigned long sent = 0;
     uint8_t buf[DATA_CHUNK];
-    int ioerr = 0;                          /* 1=lokal lesen, 2=timeout, 3=conn */
+    int ioerr = 0;
 
     for (;;) {
         size_t r = fread(buf, 1, sizeof(buf), f);
-        if (r == 0) break;                  /* EOF (ggf. Lesefehler -> ferror) */
+        if (r == 0) break;
 
         uint16_t off = 0;
         clockTicks_t start = TIMER_GET_CURRENT();
         while (off < r) {
             driveStack();
             int16_t ns = ds->send(buf + off, (uint16_t)(r - off));
-            if (ns > 0) { off += (uint16_t)ns; start = TIMER_GET_CURRENT(); }
-            else if (ns == 0) {
+            if (ns > 0) {
+                off += (uint16_t)ns; start = TIMER_GET_CURRENT();
+            } else if (ns == 0) {
                 if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
             } else { ioerr = 3; break; }
         }

@@ -131,7 +131,9 @@ private:
     int  sendCmd(const char *cmd);                  /* haengt CRLF an   */
     int  sendCmdArg(const char *cmd, const char *arg);
     int  sendRaw(const char *buf, int len);         /* alles senden     */
-    int  readReply(void);                           /* Code oder <0     */
+    /* Code oder <0. drainCtx (nur RETR-"150") = DrainCtx*: waehrend des
+     * Wartens die Datenverbindung leeren (kein mTCP-Header noetig -> void*). */
+    int  readReply(void *drainCtx = 0);
     int  openDataConn(void **dataSockOut);          /* PASV + connect   */
     void closeData(void *dataSock);
     int  simpleCmd(const char *cmd, const char *arg); /* senden + Reply */

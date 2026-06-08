@@ -151,7 +151,9 @@ void dlg_error(const char *title, const char *msg)
 /* -------------------------------------------------------------------------
  * Ja/Nein-Abfrage
  * ---------------------------------------------------------------------- */
-int dlg_confirm_def(const char *title, const char *msg, int default_yes)
+/* Ja/Nein-Abfrage mit waehlbarem Vorgabe-Fokus (file-intern; oeffentlich nur
+ * ueber dlg_confirm mit Vorgabe "Nein"). */
+static int dlg_confirm_def(const char *title, const char *msg, int default_yes)
 {
     char lines[DLG_MAX_LINES][72];
     int nlines = split_lines(msg, lines);

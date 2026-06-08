@@ -42,7 +42,6 @@ public:
 
     /* Aktiv-Status (Cursor-Hervorhebung + Header-Farbe). */
     void set_active(int a) { active = a; }
-    int  is_active() const { return active; }
 
     /* Inhalt neu einlesen - von der Unterklasse implementiert.
      * Rueckgabe: Anzahl Eintraege. */
@@ -59,8 +58,6 @@ public:
     void draw();
 
     /* Navigation (aktualisieren nur den Zustand; Aufrufer ruft danach draw()). */
-    void move_up();
-    void move_down();
     void page_up();
     void page_down();
     void move_home();

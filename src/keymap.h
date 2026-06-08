@@ -42,21 +42,6 @@
 /* Alt+Funktionstasten (geheime Shortcuts). Alt+F1 liefert Scancode 0x68. */
 #define KEY_ALT_F1  0x168
 
-/* ---- Aktionen (Zuordnung der Funktionstasten) ---- */
-enum Action {
-    ACT_NONE = 0,
-    ACT_HELP,       /* F1  */
-    ACT_CONNECT,    /* F2  FTP-Verbindung           */
-    ACT_VIEW,       /* F3  Anzeigen                 */
-    ACT_EDIT,       /* F4  Bearbeiten (nur lokal)   */
-    ACT_COPY,       /* F5  Kopieren                 */
-    ACT_RENAME,     /* F6  Umbenennen/Verschieben   */
-    ACT_MKDIR,      /* F7  Verzeichnis erstellen    */
-    ACT_DELETE,     /* F8  Loeschen                 */
-    ACT_MENU,       /* F9  Menue                    */
-    ACT_QUIT        /* F10 Beenden                  */
-};
-
 /* Eine Taste lesen (blockierend). Erweiterte Tasten => 0x100 | Scancode. */
 inline int readkey(void)
 {
