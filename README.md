@@ -9,16 +9,6 @@ keyboard-driven in 80×25 text mode.
 ![NCFTP386 downloading DOOM.EXE](docs/screenshot.png)
 
 ```
-+=====================+        +=====================+
-| C:\GAMES            |        | ftp.example.org /pub|
-+=====================+        +=====================+
-| Name      Size    D |        | Name      Size    D |
-| ..                  |        | ..                  |
-| ULTIMA    <DIR>  07 |        | games     <DIR>  01 |
-| readme.txt  1234 07 |        | readme.txt 512   01 |
-+=====================+        +=====================+
- 1Help  2Conn  3View  4Edit  5Copy  6Rename 7MkDir 8Del  9Drive 10Quit
-```
 
 ## Features
 
