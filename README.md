@@ -108,6 +108,7 @@ encrypted — and FTP transmits passwords in plain text anyway.
 | Arrow keys / PgUp PgDn | Move selection |
 | Ins | Mark entry (for multi-file copy/delete) |
 | * (numpad) | Invert selection |
+| + (numpad) | Mark files missing or different in the other panel |
 | Enter | Enter directory / view file (same as F3) |
 | Backspace | Go to parent directory |
 | F1 | Help |
