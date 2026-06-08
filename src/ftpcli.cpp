@@ -37,7 +37,10 @@
 /* --- Konstanten ------------------------------------------------------- */
 #define CTRL_TIMEOUT_MS     30000ul   /* 30s fuer Kontrollbefehle (CLAUDE.md) */
 #define DATA_TIMEOUT_MS     60000ul   /* 60s fuer Datentransfer               */
-#define CONNECT_TIMEOUT_MS  15000ul
+/* 5s: ein verlorenes erstes SYN (Kaltstart) scheitert schnell, statt 15s zu
+ * verbrennen, bevor der App-seitige Retry (perform_connect) ein frisches SYN
+ * schickt. mTCPs eigene SYN-Wiederholung kommt erst nach ~10s - zu spaet. */
+#define CONNECT_TIMEOUT_MS  5000ul
 #define CONTROL_RECV_SIZE    1024
 #define DATA_RECV_SIZE       4096
 #define DATA_CHUNK           1024
