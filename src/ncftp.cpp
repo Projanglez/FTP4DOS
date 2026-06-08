@@ -286,16 +286,37 @@ static void handle_disconnect(void)
 
 /* Verbindung mit den aktuellen g_*-Daten aufbauen. Bei Erfolg: rechtes Panel
  * listen, Fokus dorthin, Daten speichern. Rueckgabe FTP_OK oder Fehlercode.
- * Zeichnet selbst NICHT neu (Aufrufer entscheidet ueber redraw/Fehlerdialog). */
+ * Zeichnet selbst NICHT neu (Aufrufer entscheidet ueber redraw/Fehlerdialog).
+ *
+ * Transiente Fehler werden EINMAL automatisch wiederholt: Auf echter Hardware
+ * geht das allererste TCP-SYN nach einem Kaltstart gelegentlich verloren (Switch-/
+ * NIC-Aufwachen); mTCPs eigene SYN-Wiederholung kommt erst nach ~10s. Ein kurzer
+ * Nachlauf + frisches SYN heilt das zuverlaessig - gilt fuer F2 wie Auto-Connect. */
 static int perform_connect(void)
 {
     unsigned port = (unsigned)atoi(g_portStr);
-    int rc;
+    int rc = FTP_ERR_GENERAL;
+    int attempt;
 
     if (port == 0) port = 21;
-    flash_status(L(" Verbinde mit FTP-Server ...", " Connecting to FTP server ..."));
 
-    rc = g_ftp.connect(g_host, port, g_user, g_pass);
+    for (attempt = 0; attempt < 2; attempt++) {
+        flash_status(attempt == 0
+            ? L(" Verbinde mit FTP-Server ...", " Connecting to FTP server ...")
+            : L(" Erneuter Verbindungsversuch ...", " Retrying connection ..."));
+
+        rc = g_ftp.connect(g_host, port, g_user, g_pass);
+        if (rc == FTP_OK) break;
+
+        /* Nur transiente Netzfehler wiederholen; echte Fehler (Login abgelehnt)
+         * NICHT. DNS bleibt drin: ein verlorenes erstes DNS-Paket ist derselbe
+         * Kaltstart-Fall. */
+        if (rc != FTP_ERR_TIMEOUT && rc != FTP_ERR_DNS &&
+            rc != FTP_ERR_CONNECT && rc != FTP_ERR_DATACONN)
+            break;
+        if (attempt == 0)
+            FtpClient::stack_poll(500);   /* kurz nachlaufen, dann frisches SYN */
+    }
     if (rc != FTP_OK) return rc;
 
     g_right.refresh();
@@ -1063,29 +1084,14 @@ int main(int argc, char *argv[])
     redraw_all();
 
     /* Auto-Connect, wenn ein Host auf der Kommandozeile stand (-h).
-     * Die allererste Verbindung direkt nach dem Start schlaegt auf echter
-     * Hardware manchmal fehl: ARP-/DNS-Cache sind kalt und der Packet-Treiber
-     * wurde gerade erst eingehaengt. Daher Stack kurz warmlaufen lassen und bei
-     * einem transienten Fehler einmal automatisch wiederholen (entspricht dem
-     * manuellen F2-Retry, der ja zuverlaessig klappt). Bei echten Fehlern
-     * (z.B. Login abgelehnt) wird NICHT wiederholt. */
+     * Direkt nach dem Start ist der Packet-Treiber gerade erst eingehaengt und
+     * der Link noch kalt - daher den Stack kurz warmlaufen lassen, bevor der
+     * erste Verbindungsversuch startet. Den transienten Retry erledigt
+     * perform_connect() selbst (gilt damit auch fuer F2). */
     if (g_autoconnect) {
         if (g_ftp_ready) {
-            int attempt, rc = FTP_ERR_GENERAL;
-
             FtpClient::stack_poll(750);            /* Treiber/Link setteln lassen */
-            for (attempt = 0; attempt < 2; attempt++) {
-                rc = perform_connect();
-                if (rc == FTP_OK) break;
-                if (rc != FTP_ERR_TIMEOUT && rc != FTP_ERR_DNS &&
-                    rc != FTP_ERR_CONNECT && rc != FTP_ERR_DATACONN) break;
-                if (attempt == 0) {
-                    flash_status(L(" Erneuter Verbindungsversuch ...",
-                                   " Retrying connection ..."));
-                    FtpClient::stack_poll(500);    /* ARP/DNS sind jetzt warm */
-                }
-            }
-            if (rc != FTP_OK)
+            if (perform_connect() != FTP_OK)
                 dlg_error(L("Verbindung fehlgeschlagen", "Connection failed"), g_ftp.last_error());
             redraw_all();
         } else {
