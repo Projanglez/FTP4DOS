@@ -72,7 +72,7 @@ NCFTP386.EXE
 ### Command-line parameters
 
 ```
-NCFTP386 [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (or /?)
+NCFTP386 [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF]   (or /?)
 ```
 
 Both `/` and `-` are accepted as the flag prefix. Flags are **case-insensitive**;
@@ -85,14 +85,17 @@ values are passed through as-is (username and password are case-sensitive).
 | `/P:PORT` | Port (default 21) |
 | `/U:USER` | Username (default `anonymous`) |
 | `/W:PASS` | Password |
-| `/N` | Do **not** save this connection to `NCFTP386.SAV` |
+| `/S:ALL` | Save connection including password to `NCFTP386.SAV` (default) |
+| `/S:NOPASS` | Save connection but not the password |
+| `/S:OFF` | Do not save this connection |
 | `/?` | Show brief help |
 
 ### Saved connection
 
 After a successful connection, host/port/username (and optionally the password)
 are stored in `NCFTP386.SAV` next to the EXE and pre-filled on the next launch.
-The connect dialog asks whether to save the password (default: yes).
+Use `/S:ALL` (default), `/S:NOPASS`, or `/S:OFF` to control what gets saved;
+the connect dialog offers the same three choices interactively.
 
 **Security note:** The stored password is lightly obfuscated (XOR + hex), not
 encrypted — and FTP transmits passwords in plain text anyway.
