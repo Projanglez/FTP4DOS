@@ -26,7 +26,7 @@ RM      = del /Q /F
 # -----------------------------------------------------------------------------
 # Compiler-Flags
 # -ml  = Large Memory Model
-# -3   = 386-Instruktionssatz
+# -0   = 8086-Instruktionssatz (kompatibel mit 8086/286/386+)
 # -zu  = SS != DS (zwingend fuer mTCP!)
 # -s   = kein Stack-Overflow-Check
 # -ox  = maximale Optimierung
@@ -34,14 +34,14 @@ RM      = del /Q /F
 # -zp1 = Byte-Alignment in Structs
 # -ei  = enum als int
 # -----------------------------------------------------------------------------
-CFLAGS  = -ml -3 -zu -s -ox -bt=dos -zp1 -ei
+CFLAGS  = -ml -0 -zu -s -ox -bt=dos -zp1 -ei
 INCPATH = -I./src -I./mtcp/TCPINC -I./mtcp/INCLUDE
 
 # -----------------------------------------------------------------------------
 # Ausgabe
 # -----------------------------------------------------------------------------
-TARGET  = NCFTP.EXE
-MAPFILE = NCFTP.MAP
+TARGET  = NCFTP386.EXE
+MAPFILE = NCFTP386.MAP
 
 # -----------------------------------------------------------------------------
 # Applikations-Objekte

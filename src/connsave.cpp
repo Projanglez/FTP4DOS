@@ -36,7 +36,7 @@ void connsave_init(const char *argv0)
 
     if (drive[0] || dir[0]) {
         /* Verzeichnis der EXE; _splitpath liefert dir inkl. abschliessendem '\'. */
-        _makepath(g_path, drive, dir, "NCFTP", "SAV");
+        _makepath(g_path, drive, dir, "NCFTP386", "SAV");
         return;
     }
 
@@ -47,9 +47,9 @@ void connsave_init(const char *argv0)
         if (getcwd(cwd, sizeof(cwd)) == 0) strcpy(cwd, ".");
         n = (int)strlen(cwd);
         if (n > 0 && (cwd[n - 1] == '\\' || cwd[n - 1] == '/'))
-            sprintf(g_path, "%sNCFTP.SAV", cwd);
+            sprintf(g_path, "%sNCFTP386.SAV", cwd);
         else
-            sprintf(g_path, "%s\\NCFTP.SAV", cwd);
+            sprintf(g_path, "%s\\NCFTP386.SAV", cwd);
     }
 }
 
