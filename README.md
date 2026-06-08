@@ -1,146 +1,143 @@
 # NCFTP386
 
-Ein Norton-Commander-artiger **Dual-Panel-FTP-Client für MS-DOS** auf echter
-386-Hardware. Links das lokale DOS-Dateisystem, rechts ein FTP-Server über den
-[mTCP](https://github.com/mbbrutman/mTCP)-TCP/IP-Stack — vollständig
-tastaturgesteuert im 80×25-Textmodus.
+A Norton Commander-style **dual-panel FTP client for MS-DOS** running on real
+386 hardware. The left panel shows the local DOS filesystem; the right panel
+connects to an FTP server via the
+[mTCP](https://github.com/mbbrutman/mTCP) TCP/IP stack — fully
+keyboard-driven in 80×25 text mode.
 
 ```
 +=====================+        +=====================+
 | C:\GAMES            |        | ftp.example.org /pub|
 +=====================+        +=====================+
-| Name      Groesse D |        | Name      Groesse D |
+| Name      Size    D |        | Name      Size    D |
 | ..                  |        | ..                  |
 | ULTIMA    <DIR>  07 |        | games     <DIR>  01 |
 | readme.txt  1234 07 |        | readme.txt 512   01 |
 +=====================+        +=====================+
- 1Hilfe 2Verb 3Anzeig 4Edit 5Kopier 6Umben 7MkDir 8Loesch 9Laufw 10Ende
+ 1Help  2Conn  3View  4Edit  5Copy  6Rename 7MkDir 8Del  9Drive 10Quit
 ```
 
-## Funktionen
+## Features
 
-- Zwei Panels: lokal (DOS) und remote (FTP, PASV-Modus)
-- Navigieren, Verzeichnisse betreten, Dateien ansehen (F3-Viewer)
-- Kopieren in beide Richtungen (F5), **inkl. rekursiver Verzeichnisbäume**
-- Mehrfachauswahl mit der **Einfg-Taste** (Norton-Stil) für Kopieren/Löschen
-- Per-Datei-Abfrage bei Überschreib-Konflikten
-  (Überschreiben / Überspringen / Alle / Abbrechen)
-- Anlegen (F7), Umbenennen (F6), **rekursives Löschen** mit Vorab-Zählung (F8)
-- Lokaler Laufwerkswechsel (F9), zeigt nur vorhandene Laufwerke
-- Zweisprachig Deutsch/Englisch (automatisch über die DOS-Ländereinstellung,
-  oder erzwungen per Kommandozeile: `NCFTP386 /L:EN`)
+- Two panels: local (DOS) and remote (FTP, passive mode)
+- Navigate directories, view files (F3 viewer)
+- Copy in both directions (F5), including **recursive directory trees**
+- Multiple selection with the **Ins key** (Norton style) for copy/delete
+- Per-file overwrite prompts (Overwrite / Skip / All / Cancel)
+- Create (F7), rename (F6), **recursive delete** with pre-count confirmation (F8)
+- Local drive switcher (F9), lists only present drives
+- Bilingual German/English UI (auto-detected from DOS country setting,
+  or forced on the command line: `NCFTP386 /L:EN`)
 
-## Voraussetzungen zum Bauen
+## Build requirements
 
 - [Open Watcom C/C++](http://www.openwatcom.org/) (wmake, wpp, wcc, wasm, wlink)
-- Windows- oder DOS-Host für die Cross-Kompilierung
-- Ziel: 16-bit Real-Mode DOS, Large Memory Model, 386
+- Windows or DOS host for cross-compilation
+- Target: 16-bit real-mode DOS, Large memory model, 8086+
 
-## Bauen
+## Building
 
-mTCP ist eine **externe Abhängigkeit** und nicht Teil dieses Repositorys.
-Zuerst den verwendeten Fork in den Ordner `mtcp/` klonen und auf den exakten
-Commit setzen, gegen den dieses Projekt gebaut und getestet wurde:
+mTCP is an **external dependency** and is not part of this repository.
+Clone the fork used by this project into the `mtcp/` directory and check out
+the exact commit against which it was built and tested:
 
 ```sh
 git clone https://github.com/retrohun/mTCP mtcp
 git -C mtcp checkout ad9cd0f
 ```
 
-Dann mit Open Watcom bauen:
+Then build with Open Watcom:
 
 ```sh
-wmake          # baut NCFTP386.EXE
-wmake clean    # entfernt Objekte und Build-Artefakte
+wmake          # produces NCFTP386.EXE
+wmake clean    # removes objects and build artifacts
 ```
 
-Wichtig: mTCP wird mit `-0` (8086) übersetzt, der eigene Anwendungscode ebenfalls
-mit `-0` (kompatibel mit 8086/286/386+). Details stehen im `MAKEFILE` und in `CLAUDE.md`.
+Note: mTCP is compiled with `-0` (8086), and the application code likewise
+uses `-0` (compatible with 8086/286/386+). Details are in `MAKEFILE` and `CLAUDE.md`.
 
-## Ausführen (auf dem DOS-Rechner)
+## Running (on the DOS machine)
 
-Ein laufender Packet-Treiber für die Netzwerkkarte und eine mTCP-Konfiguration
-werden vorausgesetzt:
+A packet driver for your network card and an mTCP configuration file are required:
 
 ```bat
 SET MTCPCFG=C:\NET\MTCP.CFG
 NCFTP386.EXE
-REM Englische Oberflaeche erzwingen:
+REM Force English UI:
 NCFTP386.EXE /L:EN
 ```
 
-### Kommandozeilen-Parameter
+### Command-line parameters
 
 ```
-NCFTP386 [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (oder /?)
+NCFTP386 [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (or /?)
 ```
 
-Statt `/` ist auch `-` erlaubt. Die Flags sind **case-insensitiv**, die
-**Werte** werden unverändert übernommen (Passwort und Benutzername bleiben also
-Groß-/Klein-genau).
+Both `/` and `-` are accepted as the flag prefix. Flags are **case-insensitive**;
+**values** are passed through as-is (username and password are case-sensitive).
 
-| Parameter | Bedeutung |
-|-----------|-----------|
-| `/L:DE` / `/L:EN` | Oberfläche auf Deutsch bzw. Englisch erzwingen |
-| `/H:HOST` | beim Start automatisch mit HOST verbinden |
-| `/P:PORT` | Port (Vorgabe 21) |
-| `/U:USER` | Benutzername (Vorgabe `anonymous`) |
-| `/W:PASS` | Passwort |
-| `/N` | diese Verbindung **nicht** in `NCFTP386.SAV` speichern |
-| `/?` | Kurzhilfe anzeigen |
+| Parameter | Description |
+|-----------|-------------|
+| `/L:DE` / `/L:EN` | Force German or English UI |
+| `/H:HOST` | Connect to HOST automatically on startup |
+| `/P:PORT` | Port (default 21) |
+| `/U:USER` | Username (default `anonymous`) |
+| `/W:PASS` | Password |
+| `/N` | Do **not** save this connection to `NCFTP386.SAV` |
+| `/?` | Show brief help |
 
-So lassen sich für verschiedene Server kleine Batchdateien schreiben, z. B.:
+This makes it easy to create small batch files for different servers, e.g.:
 
 ```bat
-NCFTP386 /H:ftp.example.org /U:bjoern /W:geheim
+NCFTP386 /H:ftp.example.org /U:alice /W:secret
 ```
 
-### Gespeicherte Verbindung
+### Saved connection
 
-Nach einer erfolgreichen Verbindung werden Host/Port/Benutzer (und auf Wunsch
-das Passwort) in `NCFTP386.SAV` **neben der EXE** abgelegt und beim nächsten Start
-vorbefüllt. Beim Verbinden über den Dialog fragt das Programm, ob das Passwort
-mitgespeichert werden soll (Vorgabe: ja).
+After a successful connection, host/port/username (and optionally the password)
+are stored in `NCFTP386.SAV` next to the EXE and pre-filled on the next launch.
+The connect dialog asks whether to save the password (default: yes).
 
-**Sicherheitshinweis:** Das gespeicherte Passwort ist nur leicht verschleiert
-(XOR + Hex) — das verhindert flüchtiges Mitlesen, ist aber **keine echte
-Verschlüsselung**. FTP überträgt das Passwort ohnehin im Klartext. Ein per
-`-w` übergebenes Passwort steht zudem **im Klartext in der Batchdatei**.
+**Security note:** The stored password is only lightly obfuscated (XOR + hex) —
+it prevents casual shoulder-surfing but is **not real encryption**. FTP transmits
+passwords in plain text anyway. A password passed via `/W` is also stored
+**in plain text in the batch file**.
 
-## Tastenbelegung (Auszug)
+## Key bindings
 
-| Taste | Funktion |
-|-------|----------|
-| Tab | Aktives Panel wechseln |
-| Pfeile / Bild ↑↓ | Auswahl bewegen |
-| Einfg | Eintrag markieren (mehrere kopieren/löschen) |
-| Enter | Verzeichnis betreten / Datei anzeigen |
-| Backspace | Übergeordnetes Verzeichnis |
-| F2 | FTP verbinden / trennen |
-| F3 | Anzeigen · F5 Kopieren · F6 Umbenennen |
-| F7 | Verzeichnis erstellen · F8 Löschen · F9 Laufwerk |
-| F10 | Beenden |
+| Key | Action |
+|-----|--------|
+| Tab | Switch active panel |
+| Arrow keys / PgUp PgDn | Move selection |
+| Ins | Mark entry (for multi-file copy/delete) |
+| Enter | Enter directory / view file |
+| Backspace | Go to parent directory |
+| F2 | FTP connect / disconnect |
+| F3 | View · F5 Copy · F6 Rename |
+| F7 | Create directory · F8 Delete · F9 Drive |
+| F10 | Quit |
 
-## Lizenz
+## License
 
-Dieses Projekt steht unter der **GNU General Public License v3.0** (siehe
-[`LICENSE`](LICENSE)). Es linkt statisch die mTCP-Bibliothek, die ebenfalls
-unter der GPLv3 steht.
+This project is licensed under the **GNU General Public License v3.0**
+(see [`LICENSE`](LICENSE)). It statically links the mTCP library, which is
+also licensed under the GPLv3.
 
-### Drittanbieter-Code / korrespondierender Quellcode
+### Third-party code / corresponding source
 
 mTCP © Michael B. Brutman — <https://www.brutman.com/mTCP/>
 
-Verwendet wird der Fork **[retrohun/mTCP](https://github.com/retrohun/mTCP)**,
-unverändert beim Commit
+This project uses the fork **[retrohun/mTCP](https://github.com/retrohun/mTCP)**,
+unmodified at commit
 [`ad9cd0f`](https://github.com/retrohun/mTCP/commit/ad9cd0f87ab151a1ce6f1a279f306bdf94163b21)
-(20.08.2018). Genau dieser Stand bildet zusammen mit dem Code dieses Repositorys
-den vollständigen korrespondierenden Quellcode der verteilten Binärdatei
-(GPLv3 §6). Bei veröffentlichten Releases liegt eine Kopie dieser mTCP-Quellen
-als zusätzliches Asset bei.
+(2018-08-20). That exact revision, together with the source in this repository,
+constitutes the complete corresponding source for any distributed binary
+(GPLv3 §6). Published releases include a copy of those mTCP sources as an
+additional release asset.
 
-## Haftungsausschluss
+## Disclaimer
 
-Diese Software wird ohne jegliche Gewährleistung bereitgestellt.
-Der Autor übernimmt keine Haftung für Datenverlust oder Schäden.
-Nutzung auf eigene Gefahr. Siehe auch [LICENSE](LICENSE) (GPLv3, §15–16).
+This software is provided without any warranty.
+The author accepts no liability for data loss or damages.
+Use at your own risk. See also [LICENSE](LICENSE) (GPLv3, §15–16).
