@@ -66,29 +66,33 @@ werden vorausgesetzt:
 SET MTCPCFG=C:\NET\MTCP.CFG
 NCFTP.EXE
 REM Englische Oberflaeche erzwingen:
-NCFTP.EXE EN
+NCFTP.EXE /L:EN
 ```
 
 ### Kommandozeilen-Parameter
 
 ```
-NCFTP [EN] [-h HOST] [-p PORT] [-u USER] [-w PASS] [-n]   (oder /?)
+NCFTP [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (oder /?)
 ```
+
+Statt `/` ist auch `-` erlaubt. Die Flags sind **case-insensitiv**, die
+**Werte** werden unverändert übernommen (Passwort und Benutzername bleiben also
+Groß-/Klein-genau).
 
 | Parameter | Bedeutung |
 |-----------|-----------|
-| `EN` | englische Oberfläche erzwingen |
-| `-h HOST` | beim Start automatisch mit HOST verbinden |
-| `-p PORT` | Port (Vorgabe 21) |
-| `-u USER` | Benutzername (Vorgabe `anonymous`) |
-| `-w PASS` | Passwort |
-| `-n` | diese Verbindung **nicht** in `NCFTP.SAV` speichern |
+| `/L:DE` / `/L:EN` | Oberfläche auf Deutsch bzw. Englisch erzwingen |
+| `/H:HOST` | beim Start automatisch mit HOST verbinden |
+| `/P:PORT` | Port (Vorgabe 21) |
+| `/U:USER` | Benutzername (Vorgabe `anonymous`) |
+| `/W:PASS` | Passwort |
+| `/N` | diese Verbindung **nicht** in `NCFTP.SAV` speichern |
 | `/?` | Kurzhilfe anzeigen |
 
 So lassen sich für verschiedene Server kleine Batchdateien schreiben, z. B.:
 
 ```bat
-NCFTP -h ftp.example.org -u bjoern -w geheim
+NCFTP /H:ftp.example.org /U:bjoern /W:geheim
 ```
 
 ### Gespeicherte Verbindung

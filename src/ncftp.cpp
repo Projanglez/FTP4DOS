@@ -20,6 +20,7 @@
 #include <direct.h>
 #include <dos.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "tui.h"
 #include "panel.h"
@@ -29,9 +30,11 @@
 #include "keymap.h"
 #include "dialog.h"
 #include "viewer.h"
+#include "editor.h"
 #include "dircopy.h"
 #include "connsave.h"
 #include "i18n.h"
+#include "umlaut.h"   /* immer als letzter Include */
 
 /* ---- Bildschirm-Layout ---- */
 #define PANEL_TOP     0
@@ -84,7 +87,7 @@ static const char *fkey_label(int i)
 {
     static const char *de[10] = {
         "Hilfe", "Verb", "Anzeig", "Edit", "Kopier",
-        "Umben", "MkDir", "Loesch", "Laufw", "Ende"
+        "Umben", "MkDir", "L" oe "sch", "Laufw", "Ende"
     };
     static const char *en[10] = {
         "Help", "Conn", "View", "Edit", "Copy",
@@ -205,12 +208,48 @@ static void set_active(Panel *p)
     g_right.set_active(p == (Panel *)&g_right);
 }
 
+/* Datum + Uhrzeit oben rechts (in der obersten Rahmenzeile). Endet bei Spalte
+ * 77, sodass rechts 2 Rahmenzeichen (Spalten 78/79) sichtbar bleiben.
+ * Format sprachabhaengig (24-h): DE TT.MM.JJJJ, EN MM/DD/YYYY. */
+static void draw_clock(void)
+{
+    struct dosdate_t d;
+    struct dostime_t t;
+    char  buf[24];
+    int   len, col;
+
+    _dos_getdate(&d);
+    _dos_gettime(&t);
+    if (g_english)
+        sprintf(buf, "%02d/%02d/%04d %02d:%02d:%02d",
+                d.month, d.day, d.year, t.hour, t.minute, t.second);
+    else
+        sprintf(buf, "%02d.%02d.%04d %02d:%02d:%02d",
+                d.day, d.month, d.year, t.hour, t.minute, t.second);
+
+    len = (int)strlen(buf);
+    col = 78 - len;                 /* letztes Zeichen auf Spalte 77 */
+    if (col < 1) col = 1;
+    draw_text(0, col, buf, ATTR_BORDER, len);
+}
+
 static void redraw_all(void)
 {
     g_left.draw();
     g_right.draw();
     draw_statusbar();
     draw_fkeybar();
+    draw_clock();
+}
+
+/* Wird gerufen, wenn die FTP-Verbindung im Leerlauf verloren ging. */
+static void handle_disconnect(void)
+{
+    g_right.refresh();              /* zeigt "(nicht verbunden)" */
+    g_right.draw();
+    draw_clock();
+    flash_status(L(" Verbindung vom Server getrennt.",
+                   " Server closed the connection."));
 }
 
 /* -------------------------------------------------------------------------
@@ -245,7 +284,7 @@ static int perform_connect(void)
 static void do_connect(void)
 {
     if (!g_ftp_ready) {
-        dlg_error(L("FTP nicht verfuegbar", "FTP unavailable"),
+        dlg_error(L("FTP nicht verf" ue "gbar", "FTP unavailable"),
                   L("TCP/IP konnte nicht gestartet werden.\n"
                     "MTCPCFG pruefen und Programm neu starten.",
                     "TCP/IP could not be started.\n"
@@ -326,11 +365,11 @@ static int dlg_overwrite(const char *name)
     const char *items[4];
     sprintf(msg, L("Datei existiert bereits:\n%.40s",
                    "File already exists:\n%.40s"), name);
-    items[0] = L("Ueberschreiben",      "Overwrite");
-    items[1] = L("Datei ueberspringen", "Skip file");
-    items[2] = L("Alle ueberschreiben", "Overwrite all");
+    items[0] = L(Ue "berschreiben",      "Overwrite");
+    items[1] = L("Datei " ue "berspringen", "Skip file");
+    items[2] = L("Alle " ue "berschreiben", "Overwrite all");
     items[3] = L("Vorgang abbrechen",   "Cancel operation");
-    return dlg_choice(L("Ueberschreiben?", "Overwrite?"), msg, items, 4);
+    return dlg_choice(L(Ue "berschreiben?", "Overwrite?"), msg, items, 4);
 }
 
 /* Konflikt-Callback fuer dircopy + die Einzeldatei-Stapelfaelle. */
@@ -387,7 +426,7 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
 
         if (local_exists(target)) {
             char q[120];
-            sprintf(q, L("Lokale Datei existiert bereits:\n%.40s\nUeberschreiben?",
+            sprintf(q, L("Lokale Datei existiert bereits:\n%.40s\n" Ue "berschreiben?",
                          "Local file already exists:\n%.40s\nOverwrite?"), target);
             if (!dlg_confirm(L("Download", "Download"), q)) { redraw_all(); return; }
         }
@@ -411,7 +450,7 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
 
         if (g_right.has_entry(target)) {
             char q[120];
-            sprintf(q, L("Remote-Datei existiert bereits:\n%.40s\nUeberschreiben?",
+            sprintf(q, L("Remote-Datei existiert bereits:\n%.40s\n" Ue "berschreiben?",
                          "Remote file already exists:\n%.40s\nOverwrite?"), target);
             if (!dlg_confirm(L("Upload", "Upload"), q)) { redraw_all(); return; }
         }
@@ -496,7 +535,7 @@ static void do_copy(void)
     total   = (nmarked > 0) ? nmarked : 1;
     destdir = to_remote ? g_right.path() : g_left.path();
 
-    sprintf(q, L("%d Eintrag/Eintraege kopieren nach:\n%.40s",
+    sprintf(q, L("%d Eintrag/Eintr" ae "ge kopieren nach:\n%.40s",
                  "Copy %d item(s) to:\n%.40s"), total, destdir);
     if (!dlg_confirm(L("Kopieren", "Copy"), q)) { redraw_all(); return; }
 
@@ -522,10 +561,18 @@ static void do_copy(void)
     if (rc != FTP_OK && rc != FTP_ERR_ABORT)
         dlg_error(L("Kopieren fehlgeschlagen", "Copy failed"), g_ftp.last_error());
 
-    /* Markierungen aufheben und beide Seiten neu einlesen. */
-    g_active->clear_marks();
-    g_left.refresh();
-    g_right.refresh();
+    /* Markierungen aufheben und beide Seiten neu einlesen. Cursor des aktiven
+     * (Quell-)Panels auf dem kopierten Element halten. */
+    {
+        char keepname[PANEL_NAME_MAX];
+        PanelEntry *sel = g_active->selected();
+        keepname[0] = '\0';
+        if (sel) { strncpy(keepname, sel->name, sizeof(keepname) - 1); keepname[sizeof(keepname) - 1] = '\0'; }
+        g_active->clear_marks();
+        g_left.refresh();
+        g_right.refresh();
+        g_active->select_by_name(keepname);
+    }
     redraw_all();
     if (rc == FTP_ERR_ABORT)
         flash_status(L(" Kopieren abgebrochen.", " Copy aborted."));
@@ -575,6 +622,37 @@ static void do_view(void)
 }
 
 /* -------------------------------------------------------------------------
+ * F4 - Datei bearbeiten (nur lokal)
+ * ---------------------------------------------------------------------- */
+static void do_edit(void)
+{
+    char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
+    char keep[PANEL_NAME_MAX];
+    PanelEntry *e;
+
+    if (g_active == 0) return;
+    e = g_active->selected();
+    if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
+
+    if (g_active != (Panel *)&g_left) {
+        dlg_error(L("Bearbeiten", "Edit"),
+                  L("Nur lokale Dateien k" oe "nnen bearbeitet werden.",
+                    "Only local files can be edited."));
+        redraw_all();
+        return;
+    }
+
+    join_local(path, (int)sizeof(path), g_left.path(), e->name);
+    strcpy(keep, e->name);
+    edit_file(path, e->name);
+
+    /* Groesse/Datum koennen sich geaendert haben -> neu lesen, Cursor halten. */
+    g_left.refresh();
+    g_left.select_by_name(keep);
+    redraw_all();
+}
+
+/* -------------------------------------------------------------------------
  * F7 - Verzeichnis erstellen (lokal oder remote)
  * ---------------------------------------------------------------------- */
 static void do_mkdir(void)
@@ -601,7 +679,7 @@ static void do_mkdir(void)
         if (rc != FTP_OK)
             dlg_error(L("Verzeichnis erstellen", "Make Directory"), g_ftp.last_error());
         else
-            g_right.refresh();
+            { g_right.refresh(); g_right.select_by_name(name); }
     } else {
         char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
         join_local(path, (int)sizeof(path), g_left.path(), name);
@@ -609,7 +687,7 @@ static void do_mkdir(void)
             dlg_error(L("Verzeichnis erstellen", "Make Directory"),
                       L("Konnte Verzeichnis nicht anlegen.", "Could not create directory."));
         else
-            g_left.refresh();
+            { g_left.refresh(); g_left.select_by_name(name); }
     }
     redraw_all();
 }
@@ -666,14 +744,14 @@ static void do_delete(void)
 {
     char        prompt[140];
     PanelEntry *cur;
-    int         on_remote, nmarked, i, errors;
+    int         on_remote, nmarked, i, errors, keepidx;
     unsigned    nfiles = 0, ndirs = 0;
 
     if (g_active == 0) return;
     on_remote = (g_active == (Panel *)&g_right);
 
     if (on_remote && !g_ftp.is_connected()) {
-        dlg_error(L("Loeschen", "Delete"),
+        dlg_error(L("L" oe "schen", "Delete"),
                   L("Keine FTP-Verbindung.\nMit F2 zuerst verbinden.",
                     "No FTP connection.\nConnect with F2 first."));
         redraw_all(); return;
@@ -681,23 +759,25 @@ static void do_delete(void)
 
     nmarked = g_active->marked_count();
     cur     = g_active->selected();
+    keepidx = g_active->selected_index();   /* nach dem Loeschen hier bleiben */
 
     /* --- Komfortpfad: einzelne Datei (kein Baum) --- */
     if (nmarked == 0) {
         if (cur == 0 || cur->is_parent) { redraw_all(); return; }
         if (!cur->is_dir) {
-            sprintf(prompt, L("Datei \"%.32s\"\nloeschen?",
+            sprintf(prompt, L("Datei \"%.32s\"\nl" oe "schen?",
                               "Delete file\n\"%.32s\"?"), cur->name);
-            if (!dlg_confirm(L("Loeschen", "Delete"), prompt)) { redraw_all(); return; }
+            if (!dlg_confirm(L("L" oe "schen", "Delete"), prompt)) { redraw_all(); return; }
             if (delete_one_entry(on_remote, cur) != 0) {
                 if (on_remote)
-                    dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"), g_ftp.last_error());
+                    dlg_error(L("L" oe "schen fehlgeschlagen", "Delete failed"), g_ftp.last_error());
                 else
-                    dlg_error(L("Loeschen fehlgeschlagen", "Delete failed"),
-                              L("Datei konnte nicht\ngeloescht werden.",
+                    dlg_error(L("L" oe "schen fehlgeschlagen", "Delete failed"),
+                              L("Datei konnte nicht\ngel" oe "scht werden.",
                                 "Could not delete\nthe file."));
             } else {
                 if (on_remote) g_right.refresh(); else g_left.refresh();
+                g_active->set_cursor_index(keepidx);
             }
             redraw_all();
             return;
@@ -716,13 +796,13 @@ static void do_delete(void)
         count_one(on_remote, cur, &nfiles, &ndirs);   /* einzelnes Verzeichnis */
     }
 
-    sprintf(prompt, L("%u Datei(en) und %u Verzeichnis(se)\nunwiderruflich loeschen?",
+    sprintf(prompt, L("%u Datei(en) und %u Verzeichnis(se)\nunwiderruflich l" oe "schen?",
                       "Permanently delete\n%u file(s) and %u director(y/ies)?"),
             nfiles, ndirs);
-    if (!dlg_confirm(L("Loeschen", "Delete"), prompt)) { redraw_all(); return; }
+    if (!dlg_confirm(L("L" oe "schen", "Delete"), prompt)) { redraw_all(); return; }
 
     redraw_all();
-    dlg_progress_begin(L("Loeschen", "Delete"), "");
+    dlg_progress_begin(L("L" oe "schen", "Delete"), "");
 
     errors = 0;
     if (nmarked > 0) {
@@ -739,9 +819,10 @@ static void do_delete(void)
 
     g_active->clear_marks();
     if (on_remote) g_right.refresh(); else g_left.refresh();
+    g_active->set_cursor_index(keepidx);
     if (errors)
-        dlg_error(L("Loeschen", "Delete"),
-                  L("Einige Eintraege konnten nicht\nvollstaendig geloescht werden.",
+        dlg_error(L("L" oe "schen", "Delete"),
+                  L("Einige Eintr" ae "ge konnten nicht\nvollst" ae "ndig gel" oe "scht werden.",
                     "Some items could not be\nfully deleted."));
     redraw_all();
 }
@@ -779,7 +860,7 @@ static void do_rename(void)
         if (rc != FTP_OK)
             dlg_error(L("Umbenennen fehlgeschlagen", "Rename failed"), g_ftp.last_error());
         else
-            g_right.refresh();
+            { g_right.refresh(); g_right.select_by_name(newname); }
     } else {
         char oldpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
         char newpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
@@ -787,10 +868,10 @@ static void do_rename(void)
         join_local(newpath, (int)sizeof(newpath), g_left.path(), newname);
         if (rename(oldpath, newpath) != 0)
             dlg_error(L("Umbenennen fehlgeschlagen", "Rename failed"),
-                      L("Konnte nicht umbenennen.\nName ungueltig oder existiert bereits.",
+                      L("Konnte nicht umbenennen.\nName ung" ue "ltig oder existiert bereits.",
                         "Could not rename.\nName invalid or already exists."));
         else
-            g_left.refresh();
+            { g_left.refresh(); g_left.select_by_name(newname); }
     }
     redraw_all();
 }
@@ -837,7 +918,7 @@ static void do_drives(void)
     initial = 0;
     { int i; for (i = 0; i < n; i++) if (letters[i] == cur) initial = i; }
 
-    sel = dlg_menu(L("Laufwerk waehlen", "Select Drive"), items, n, initial);
+    sel = dlg_menu(L("Laufwerk w" ae "hlen", "Select Drive"), items, n, initial);
     if (sel < 0) { redraw_all(); return; }
 
     newd = letters[sel];
@@ -863,23 +944,25 @@ static void print_usage(void)
 {
     if (g_english) {
         printf("NCFTP386 - Norton Commander style FTP client for DOS\n\n");
-        printf("Usage: NCFTP [EN] [-h HOST] [-p PORT] [-u USER] [-w PASS] [-n]\n\n");
-        printf("  EN        force English user interface\n");
-        printf("  -h HOST   connect to HOST automatically on startup\n");
-        printf("  -p PORT   port (default 21)\n");
-        printf("  -u USER   user name (default anonymous)\n");
-        printf("  -w PASS   password  (WARNING: stored in cleartext in the batch file)\n");
-        printf("  -n        do not save this connection to NCFTP.SAV\n");
+        printf("Usage: NCFTP [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]\n");
+        printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
+        printf("  /L:EN|DE  force English or German user interface\n");
+        printf("  /H:HOST   connect to HOST automatically on startup\n");
+        printf("  /P:PORT   port (default 21)\n");
+        printf("  /U:USER   user name (default anonymous)\n");
+        printf("  /W:PASS   password  (WARNING: stored in cleartext in the batch file)\n");
+        printf("  /N        do not save this connection to NCFTP.SAV\n");
         printf("  /?        this help\n");
     } else {
-        printf("NCFTP386 - FTP-Client im Norton-Commander-Stil fuer DOS\n\n");
-        printf("Aufruf: NCFTP [EN] [-h HOST] [-p PORT] [-u USER] [-w PASS] [-n]\n\n");
-        printf("  EN        englische Oberflaeche erzwingen\n");
-        printf("  -h HOST   beim Start automatisch mit HOST verbinden\n");
-        printf("  -p PORT   Port (Vorgabe 21)\n");
-        printf("  -u USER   Benutzername (Vorgabe anonymous)\n");
-        printf("  -w PASS   Passwort  (ACHTUNG: steht im Klartext in der Batchdatei)\n");
-        printf("  -n        diese Verbindung nicht in NCFTP.SAV speichern\n");
+        printf("NCFTP386 - FTP-Client im Norton-Commander-Stil f" ue "r DOS\n\n");
+        printf("Aufruf: NCFTP [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]\n");
+        printf("       (statt '/' ist auch '-' erlaubt; Flags case-insensitiv)\n\n");
+        printf("  /L:DE|EN  Oberfl" ae "che auf Deutsch oder Englisch erzwingen\n");
+        printf("  /H:HOST   beim Start automatisch mit HOST verbinden\n");
+        printf("  /P:PORT   Port (Vorgabe 21)\n");
+        printf("  /U:USER   Benutzername (Vorgabe anonymous)\n");
+        printf("  /W:PASS   Passwort  (ACHTUNG: steht im Klartext in der Batchdatei)\n");
+        printf("  /N        diese Verbindung nicht in NCFTP.SAV speichern\n");
         printf("  /?        diese Hilfe\n");
     }
 }
@@ -901,32 +984,51 @@ int main(int argc, char *argv[])
     connsave_load(g_host, (int)sizeof(g_host), g_portStr, (int)sizeof(g_portStr),
                   g_user, (int)sizeof(g_user), g_pass, (int)sizeof(g_pass), &g_savepw);
 
-    /* Kommandozeile parsen (ueberschreibt die geladenen Werte):
-     *   EN  -> Englisch    -h/-p/-u/-w -> Verbindungsdaten + Auto-Connect (bei -h)
-     *   -n  -> nicht speichern         /? -> Hilfe und beenden
-     * Prefix '-' und '/' beide erlaubt; Wert folgt als naechstes Argument. */
+    /* Kommandozeile parsen (ueberschreibt die geladenen Werte). Einheitliche
+     * Syntax /X bzw. /X:Wert; '-' statt '/' ebenfalls erlaubt. Das Flag-Zeichen
+     * ist case-insensitiv, der WERT wird unveraendert uebernommen (Passwort und
+     * Benutzer bleiben damit Gross-/Kleinschreibung-genau).
+     *   /L:DE|EN  Sprache      /H:Host (+Auto-Connect)  /P:Port
+     *   /U:User   /W:Passwort  /N nicht speichern       /? Hilfe */
     {
         int want_help = 0;
         for (i = 1; i < argc; i++) {
             const char *o = argv[i];
+            const char *val;
             char f;
+
             if (*o == '/' || *o == '-') o++;
-
-            if ((o[0] == 'e' || o[0] == 'E') && (o[1] == 'n' || o[1] == 'N') && o[2] == '\0') {
-                g_english = 1; continue;
-            }
-            if (o[0] == '?' && o[1] == '\0') { want_help = 1; continue; }
-
             f = (char)tolower((unsigned char)o[0]);
-            if (o[1] == '\0' && (f == 'h' || f == 'p' || f == 'u' || f == 'w')) {
-                const char *val = (i + 1 < argc) ? argv[++i] : "";
-                if      (f == 'h') { strncpy(g_host,    val, sizeof(g_host)    - 1); g_host[sizeof(g_host) - 1]       = 0; g_autoconnect = 1; }
-                else if (f == 'p') { strncpy(g_portStr, val, sizeof(g_portStr) - 1); g_portStr[sizeof(g_portStr) - 1] = 0; }
-                else if (f == 'u') { strncpy(g_user,    val, sizeof(g_user)    - 1); g_user[sizeof(g_user) - 1]       = 0; }
-                else               { strncpy(g_pass,    val, sizeof(g_pass)    - 1); g_pass[sizeof(g_pass) - 1]       = 0; }
-                continue;
+            /* Wert = Rest nach ':' (falls vorhanden), sonst leer. */
+            val = (o[1] == ':') ? (o + 2) : "";
+
+            switch (f) {
+            case 'l':   /* Sprache: Wert case-insensitiv */
+                if (val[0] == 'e' || val[0] == 'E') g_english = 1;
+                else if (val[0] == 'd' || val[0] == 'D') g_english = 0;
+                break;
+            case 'h':
+                strncpy(g_host, val, sizeof(g_host) - 1); g_host[sizeof(g_host) - 1] = 0;
+                if (g_host[0]) g_autoconnect = 1;
+                break;
+            case 'p':
+                strncpy(g_portStr, val, sizeof(g_portStr) - 1); g_portStr[sizeof(g_portStr) - 1] = 0;
+                break;
+            case 'u':
+                strncpy(g_user, val, sizeof(g_user) - 1); g_user[sizeof(g_user) - 1] = 0;
+                break;
+            case 'w':
+                strncpy(g_pass, val, sizeof(g_pass) - 1); g_pass[sizeof(g_pass) - 1] = 0;
+                break;
+            case 'n':
+                g_nosave = 1;
+                break;
+            case '?':
+                want_help = 1;
+                break;
+            default:
+                break;
             }
-            if (f == 'n' && o[1] == '\0') { g_nosave = 1; continue; }
         }
         if (want_help) { print_usage(); return 0; }
     }
@@ -979,13 +1081,37 @@ int main(int argc, char *argv[])
                 dlg_error(L("Verbindung fehlgeschlagen", "Connection failed"), g_ftp.last_error());
             redraw_all();
         } else {
-            flash_status(L(" FTP nicht verfuegbar (MTCPCFG?).",
+            flash_status(L(" FTP nicht verf" ue "gbar (MTCPCFG?).",
                            " FTP unavailable (MTCPCFG?)."));
         }
     }
 
+    {
+    time_t last_noop  = time(0);
+    time_t last_clock = 0;
+
     while (running) {
-        int key = readkey();
+        int key;
+
+        /* Leerlauf: auf Taste warten und dabei die Verbindung pflegen.
+         *  - Uhr jede Sekunde aktualisieren,
+         *  - bei bestehender Verbindung den Stack treiben + Abbruch erkennen,
+         *  - alle 60 s ein NOOP senden (Keepalive gegen Server-Idle-Timeout). */
+        while (running && !key_pending()) {
+            time_t now = time(0);
+            if (now != last_clock) { draw_clock(); last_clock = now; }
+            if (g_ftp.is_connected()) {
+                if (!g_ftp.idle_drive()) {
+                    handle_disconnect();
+                } else if (now - last_noop >= 60) {
+                    last_noop = now;
+                    if (g_ftp.noop() != FTP_OK) handle_disconnect();
+                }
+            }
+        }
+
+        key = readkey();
+        last_noop = time(0);    /* Tastenaktivitaet -> Keepalive-Timer neu */
 
         switch (key) {
         case KEY_TAB:
@@ -1032,29 +1158,30 @@ int main(int argc, char *argv[])
             dlg_message(L("Hilfe", "Help"),
                 L("Tab        Panel wechseln\n"
                   "Pfeile     Auswahl bewegen\n"
-                  "Einfg      Eintrag markieren (mehrere kopieren/loeschen)\n"
+                  "Einfg      Eintrag markieren (mehrere kopieren/l" oe "schen)\n"
                   "Enter      Verzeichnis betreten / Datei anzeigen\n"
-                  "Backspace  Uebergeordnetes Verzeichnis\n"
-                  "F2 Verbinden  F3 Anzeigen  F5 Kopieren (rekursiv)\n"
-                  "F6 Umbenennen  F7 MkDir  F8 Loeschen  F9 Laufwerk\n"
-                  "F10        Beenden",
+                  "Backspace  " Ue "bergeordnetes Verzeichnis\n"
+                  "F2 Verbinden  F3 Anzeigen  F4 Bearbeiten\n"
+                  "F5 Kopieren (rekursiv)  F6 Umbenennen\n"
+                  "F7 MkDir  F8 L" oe "schen  F9 Laufwerk  F10 Ende",
                   "Tab        Switch panel\n"
                   "Arrows     Move selection\n"
                   "Insert     Mark item (copy/delete several)\n"
                   "Enter      Enter directory / view file\n"
                   "Backspace  Parent directory\n"
-                  "F2 Connect  F3 View  F5 Copy (recursive)\n"
-                  "F6 Rename  F7 MkDir  F8 Delete  F9 Drive\n"
-                  "F10        Quit"), 0);
+                  "F2 Connect  F3 View  F4 Edit\n"
+                  "F5 Copy (recursive)  F6 Rename\n"
+                  "F7 MkDir  F8 Delete  F9 Drive  F10 Quit"), 0);
             break;
         case KEY_F2:  do_connect(); break;
         case KEY_F3:  do_view(); break;
-        case KEY_F4:  flash_status(L(" F4  Bearbeiten - folgt spaeter", " F4  Edit - coming later")); break;
+        case KEY_F4:  do_edit(); break;
         case KEY_F5:  do_copy(); break;
         case KEY_F6:  do_rename(); break;
         case KEY_F7:  do_mkdir(); break;
         case KEY_F8:  do_delete(); break;
         case KEY_F9:  do_drives(); break;
+        case KEY_ALT_F1: do_drives(); break;   /* geheim: wie F9 (NC-Veteranen) */
 
         case KEY_F10:
             if (dlg_confirm(L("Beenden", "Quit"),
@@ -1066,6 +1193,7 @@ int main(int argc, char *argv[])
             break;
         }
     }
+    }   /* Ende Leerlauf-/Event-Block */
 
     /* Sauber trennen und mTCP-Stack zurueckgeben. */
     if (g_ftp.is_connected())
