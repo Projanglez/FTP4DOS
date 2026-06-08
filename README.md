@@ -138,3 +138,9 @@ unverändert beim Commit
 den vollständigen korrespondierenden Quellcode der verteilten Binärdatei
 (GPLv3 §6). Bei veröffentlichten Releases liegt eine Kopie dieser mTCP-Quellen
 als zusätzliches Asset bei.
+
+## Haftungsausschluss
+
+Diese Software wird ohne jegliche Gewährleistung bereitgestellt.
+Der Autor übernimmt keine Haftung für Datenverlust oder Schäden.
+Nutzung auf eigene Gefahr. Siehe auch [LICENSE](LICENSE) (GPLv3, §15–16).
