@@ -39,6 +39,9 @@
 #define KEY_F9      0x143
 #define KEY_F10     0x144
 
+/* Alt+Funktionstasten (geheime Shortcuts). Alt+F1 liefert Scancode 0x68. */
+#define KEY_ALT_F1  0x168
+
 /* ---- Aktionen (Zuordnung der Funktionstasten) ---- */
 enum Action {
     ACT_NONE = 0,
@@ -61,6 +64,12 @@ inline int readkey(void)
     if (k == 0)
         k = 0x100 | getch();
     return k;
+}
+
+/* Steht eine Taste bereit? (nicht-blockierend, fuer die Leerlaufschleife). */
+inline int key_pending(void)
+{
+    return kbhit();
 }
 
 #endif /* KEYMAP_H */

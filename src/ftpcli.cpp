@@ -30,6 +30,9 @@
 #include "tcp.h"
 #include "tcpsockm.h"
 
+/* Nach allen System-/mTCP-Headern: kurze Umlaut-Makros fuer deutsche Texte. */
+#include "umlaut.h"
+
 
 /* --- Konstanten ------------------------------------------------------- */
 #define CTRL_TIMEOUT_MS     30000ul   /* 30s fuer Kontrollbefehle (CLAUDE.md) */
@@ -230,7 +233,7 @@ int FtpClient::readReply(void) {
                 return FTP_ERR_PROTO;
             }
             if (elapsedMs(start) > CTRL_TIMEOUT_MS) {
-                setError(L("Zeitueberschreitung beim Warten auf Serverantwort", "Timeout waiting for server reply"));
+                setError(L("Zeit" ue "berschreitung beim Warten auf Serverantwort", "Timeout waiting for server reply"));
                 return FTP_ERR_TIMEOUT;
             }
         } else {
@@ -278,10 +281,10 @@ int FtpClient::openDataConn(void **dataSockOut) {
     pasvPort = ((q1 & 0xFF) << 8) + (q2 & 0xFF);
 
     TcpSocket *d = TcpSocketMgr::getSocket();
-    if (!d) { setError(L("Kein freier Socket fuer Datenverbindung", "No free socket for data connection")); return FTP_ERR_DATACONN; }
+    if (!d) { setError(L("Kein freier Socket f" ue "r Datenverbindung", "No free socket for data connection")); return FTP_ERR_DATACONN; }
     if (d->setRecvBuffer(DATA_RECV_SIZE)) {
         TcpSocketMgr::freeSocket(d);
-        setError(L("Zu wenig Speicher fuer Datenpuffer", "Not enough memory for data buffer"));
+        setError(L("Zu wenig Speicher f" ue "r Datenpuffer", "Not enough memory for data buffer"));
         return FTP_ERR_DATACONN;
     }
 
@@ -325,7 +328,7 @@ int FtpClient::connect(const char *host, unsigned port,
     IpAddr_t addr;
     int8_t drc = Dns::resolve(host, addr, 1);
     if (drc < 0) {
-        setError(L("Hostname zu lang oder ungueltig", "Host name too long or invalid"));
+        setError(L("Hostname zu lang oder ung" ue "ltig", "Host name too long or invalid"));
         state = FTP_DISCONNECTED; return FTP_ERR_DNS;
     }
     if (drc != 0) {
@@ -335,7 +338,7 @@ int FtpClient::connect(const char *host, unsigned port,
             Arp::driveArp();
             Dns::drivePendingQuery();
             if (elapsedMs(start) > DNS_TIMEOUT) {
-                setError(L("DNS-Zeitueberschreitung", "DNS timeout"));
+                setError(L("DNS-Zeit" ue "berschreitung", "DNS timeout"));
                 state = FTP_DISCONNECTED; return FTP_ERR_DNS;
             }
         }
@@ -382,7 +385,7 @@ int FtpClient::connect(const char *host, unsigned port,
     code = readReply();
     if (code < 0) { disconnect(); return code; }
     if (code == 230 || code == 202) { state = FTP_IDLE; return FTP_OK; }
-    if (code == 332) { setError(L("Server verlangt ACCT (nicht unterstuetzt)", "Server requires ACCT (unsupported)")); disconnect(); return FTP_ERR_AUTH; }
+    if (code == 332) { setError(L("Server verlangt ACCT (nicht unterst" ue "tzt)", "Server requires ACCT (unsupported)")); disconnect(); return FTP_ERR_AUTH; }
 
     setErrorReply(L("Login fehlgeschlagen", "Login failed"));
     disconnect();
@@ -412,6 +415,29 @@ void FtpClient::disconnect(void) {
     state = FTP_DISCONNECTED;
 }
 
+
+/* ===================================================================== */
+/* Keepalive / Leerlauf                                                  */
+/* ===================================================================== */
+
+int FtpClient::noop(void) {
+    if (!is_connected()) return FTP_ERR_GENERAL;
+    if (sendCmd("NOOP") != FTP_OK) { disconnect(); return FTP_ERR_PROTO; }
+    int code = readReply();
+    if (code < 0) { disconnect(); return code; }   /* Verbindung verloren */
+    return FTP_OK;                                  /* 200 erwartet, sonst egal */
+}
+
+int FtpClient::idle_drive(void) {
+    if (!is_connected()) return 0;
+    driveStack();
+    TcpSocket *s = (TcpSocket *)ctrl;
+    if (s && s->isRemoteClosed() && !s->recvDataWaiting()) {
+        disconnect();
+        return 0;
+    }
+    return 1;
+}
 
 /* ===================================================================== */
 /* Verzeichnisliste                                                      */
@@ -474,7 +500,7 @@ int FtpClient::list(const char *path, FtpLineCb cb, void *ctx) {
     code = readReply();                     /* Abschluss 226 */
     state = FTP_IDLE;
     if (code < 0) return code;
-    if (code >= 400) { setErrorReply(L("LIST unvollstaendig", "LIST incomplete")); return FTP_ERR_SERVER; }
+    if (code >= 400) { setErrorReply(L("LIST unvollst" ae "ndig", "LIST incomplete")); return FTP_ERR_SERVER; }
     return FTP_OK;
 }
 
@@ -593,12 +619,12 @@ int FtpClient::retr(const char *remote, const char *localpath,
     closeData(d);
 
     if (ioerr == 1) { remove(localpath); setError(L("Schreibfehler (Platte voll?)", "Write error (disk full?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
-    if (ioerr == 2) { setError(L("Zeitueberschreitung beim Download", "Download timeout")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+    if (ioerr == 2) { setError(L("Zeit" ue "berschreitung beim Download", "Download timeout")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;
     if (code < 0) return code;
-    if (code >= 400) { setErrorReply(L("Download unvollstaendig", "Download incomplete")); return FTP_ERR_SERVER; }
+    if (code >= 400) { setErrorReply(L("Download unvollst" ae "ndig", "Download incomplete")); return FTP_ERR_SERVER; }
     return FTP_OK;
 }
 
@@ -665,13 +691,13 @@ int FtpClient::stor(const char *localpath, const char *remote,
     closeData(d);                           /* blockierend: alle Daten + FIN raus */
 
     if (ioerr == 1) { setError(L("Lokaler Lesefehler", "Local read error")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
-    if (ioerr == 2) { setError(L("Zeitueberschreitung beim Upload", "Upload timeout")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+    if (ioerr == 2) { setError(L("Zeit" ue "berschreitung beim Upload", "Upload timeout")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
     if (ioerr == 3) { setError(L("Datenverbindung verloren", "Data connection lost")); state = FTP_IDLE; return FTP_ERR_DATACONN; }
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;
     if (code < 0) return code;
-    if (code >= 400) { setErrorReply(L("Upload unvollstaendig", "Upload incomplete")); return FTP_ERR_SERVER; }
+    if (code >= 400) { setErrorReply(L("Upload unvollst" ae "ndig", "Upload incomplete")); return FTP_ERR_SERVER; }
     return FTP_OK;
 }
 
@@ -700,14 +726,14 @@ int FtpClient::make_dir(const char *path) {
 int FtpClient::remove_dir(const char *path) {
     if (!is_connected()) { setError(L("Nicht verbunden", "Not connected")); return FTP_ERR_GENERAL; }
     int rc = simpleCmd("RMD", path);        /* 250 */
-    if (rc == FTP_ERR_SERVER) setErrorReply(L("Verzeichnis loeschen fehlgeschlagen", "Remove directory failed"));
+    if (rc == FTP_ERR_SERVER) setErrorReply(L("Verzeichnis l" oe "schen fehlgeschlagen", "Remove directory failed"));
     return rc;
 }
 
 int FtpClient::remove_file(const char *path) {
     if (!is_connected()) { setError(L("Nicht verbunden", "Not connected")); return FTP_ERR_GENERAL; }
     int rc = simpleCmd("DELE", path);       /* 250 */
-    if (rc == FTP_ERR_SERVER) setErrorReply(L("Loeschen fehlgeschlagen", "Delete failed"));
+    if (rc == FTP_ERR_SERVER) setErrorReply(L("L" oe "schen fehlgeschlagen", "Delete failed"));
     return rc;
 }
 
