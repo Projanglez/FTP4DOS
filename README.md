@@ -28,7 +28,7 @@ tastaturgesteuert im 80×25-Textmodus.
 - Anlegen (F7), Umbenennen (F6), **rekursives Löschen** mit Vorab-Zählung (F8)
 - Lokaler Laufwerkswechsel (F9), zeigt nur vorhandene Laufwerke
 - Zweisprachig Deutsch/Englisch (automatisch über die DOS-Ländereinstellung,
-  oder erzwungen per Kommandozeile: `NCFTP EN`)
+  oder erzwungen per Kommandozeile: `NCFTP386 /L:EN`)
 
 ## Voraussetzungen zum Bauen
 
@@ -50,12 +50,12 @@ git -C mtcp checkout ad9cd0f
 Dann mit Open Watcom bauen:
 
 ```sh
-wmake          # baut NCFTP.EXE
+wmake          # baut NCFTP386.EXE
 wmake clean    # entfernt Objekte und Build-Artefakte
 ```
 
-Wichtig: mTCP wird mit `-0` (8086) übersetzt, der eigene Anwendungscode mit
-`-3` (386). Details und Begründung stehen im `MAKEFILE` und in `CLAUDE.md`.
+Wichtig: mTCP wird mit `-0` (8086) übersetzt, der eigene Anwendungscode ebenfalls
+mit `-0` (kompatibel mit 8086/286/386+). Details stehen im `MAKEFILE` und in `CLAUDE.md`.
 
 ## Ausführen (auf dem DOS-Rechner)
 
@@ -64,15 +64,15 @@ werden vorausgesetzt:
 
 ```bat
 SET MTCPCFG=C:\NET\MTCP.CFG
-NCFTP.EXE
+NCFTP386.EXE
 REM Englische Oberflaeche erzwingen:
-NCFTP.EXE /L:EN
+NCFTP386.EXE /L:EN
 ```
 
 ### Kommandozeilen-Parameter
 
 ```
-NCFTP [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (oder /?)
+NCFTP386 [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/N]   (oder /?)
 ```
 
 Statt `/` ist auch `-` erlaubt. Die Flags sind **case-insensitiv**, die
@@ -86,19 +86,19 @@ Groß-/Klein-genau).
 | `/P:PORT` | Port (Vorgabe 21) |
 | `/U:USER` | Benutzername (Vorgabe `anonymous`) |
 | `/W:PASS` | Passwort |
-| `/N` | diese Verbindung **nicht** in `NCFTP.SAV` speichern |
+| `/N` | diese Verbindung **nicht** in `NCFTP386.SAV` speichern |
 | `/?` | Kurzhilfe anzeigen |
 
 So lassen sich für verschiedene Server kleine Batchdateien schreiben, z. B.:
 
 ```bat
-NCFTP /H:ftp.example.org /U:bjoern /W:geheim
+NCFTP386 /H:ftp.example.org /U:bjoern /W:geheim
 ```
 
 ### Gespeicherte Verbindung
 
 Nach einer erfolgreichen Verbindung werden Host/Port/Benutzer (und auf Wunsch
-das Passwort) in `NCFTP.SAV` **neben der EXE** abgelegt und beim nächsten Start
+das Passwort) in `NCFTP386.SAV` **neben der EXE** abgelegt und beim nächsten Start
 vorbefüllt. Beim Verbinden über den Dialog fragt das Programm, ob das Passwort
 mitgespeichert werden soll (Vorgabe: ja).
 

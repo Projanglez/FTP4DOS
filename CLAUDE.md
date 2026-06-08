@@ -263,7 +263,7 @@ wmake
 
 REM Auf der DOS-386:
 SET MTCPCFG=C:\NET\MTCP.CFG
-NCFTP.EXE
+NCFTP386.EXE
 ```
 
 ## Implementierungs-Reihenfolge
