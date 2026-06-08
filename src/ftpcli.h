@@ -78,6 +78,16 @@ public:
     }
     FtpState get_state(void) const { return state; }
 
+    /* --- Keepalive / Leerlauf --- */
+    /* NOOP senden (haelt die Steuerverbindung gegen Server-Idle-Timeouts wach).
+     * Geht die Verbindung dabei verloren, wird sauber getrennt; Rueckgabe
+     * FTP_OK oder ein Fehlercode. */
+    int  noop(void);
+    /* Den Stack einmal treiben und einen serverseitigen Verbindungsabbau
+     * erkennen (ohne etwas zu senden). Rueckgabe 1 = noch verbunden, 0 = gerade
+     * getrennt. */
+    int  idle_drive(void);
+
     /* Verzeichnisliste abrufen. Jede Roh-Textzeile -> cb(ctx, line). */
     int  list(const char *path, FtpLineCb cb, void *ctx);
 
