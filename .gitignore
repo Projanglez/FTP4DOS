@@ -26,3 +26,4 @@ src/*.obj
 # Editor- und Tooling-Konfiguration (lokal, gehoert nicht ins Repo)
 .claude/
 .vscode/
+CLAUDE.md
