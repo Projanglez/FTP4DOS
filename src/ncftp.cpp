@@ -986,7 +986,8 @@ static void do_drives(void)
 /* Kurzhilfe (/?) auf stdout - laeuft vor tui_init, daher normale Ausgabe. */
 static void print_usage(void)
 {
-    printf("NCFTP386 v" APP_VERSION " - Dual-Panel FTP Client for DOS\n\n");
+    printf("NCFTP386 v" APP_VERSION " - Dual-Panel FTP Client for DOS\n");
+    printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ncftp386\n\n");
     printf("Usage: NCFTP386 [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF] [/Q]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
@@ -999,7 +1000,6 @@ static void print_usage(void)
     printf("  /S:OFF          do not save this connection\n");
     printf("  /Q              skip splash screen\n");
     printf("  /?              this help\n");
-    printf("\n(c) 2026 Projanglez -- https://github.com/Projanglez/ncftp386\n");
 }
 
 /* -------------------------------------------------------------------------
