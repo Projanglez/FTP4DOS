@@ -70,4 +70,8 @@ int dlg_connect(const char *title,
                 int *save_conn,
                 int *save_pass);
 
+/* Splash-Screen beim Programmstart: zentrierte Box mit Versionsinfo.
+ * Verschwindet nach ~2 Sekunden oder bei Tastendruck. */
+void dlg_splash(const char *version);
+
 #endif /* DIALOG_H */

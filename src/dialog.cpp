@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "dialog.h"
 #include "tui.h"
@@ -685,4 +686,44 @@ int dlg_connect(const char *title,
         *save_pass = chk_pass;
     }
     return result;
+}
+
+/* -------------------------------------------------------------------------
+ * Splash-Screen
+ * ---------------------------------------------------------------------- */
+void dlg_splash(const char *version)
+{
+    int r = 7, c = 15, h = 11, w = 50;
+    int inner = w - 2;
+    unsigned char bg = ATTR_DIALOG_BG;
+    char titlebuf[40];
+    clock_t t0;
+
+    /* Hilfsmakro: Text zentriert in der Box zeichnen */
+#define SPLASH_LINE(row, text, attr) \
+    { const char *_t = (text); int _l = (int)strlen(_t); \
+      draw_text((row), (c) + 1 + (inner - _l) / 2, _t, (attr), _l); }
+
+    sprintf(titlebuf, "NCFTP386  v%s", version ? version : "");
+
+    fill_rect(r, c, h, w, ' ', bg);
+    draw_box(r, c, h, w, bg, 1);
+
+    SPLASH_LINE(r + 2, titlebuf,
+                ATTR_DIALOG_HL)
+    SPLASH_LINE(r + 3, L("Dual-Panel FTP Client f" ue "r DOS",
+                          "Dual-Panel FTP Client for DOS"),
+                bg)
+    SPLASH_LINE(r + 5, "(c) 2026  Projanglez",             bg)
+    SPLASH_LINE(r + 6, "GNU General Public License v3",    bg)
+    SPLASH_LINE(r + 8, L("[Beliebige Taste zum Starten]",
+                          "[Any key to start]"),
+                bg)
+
+#undef SPLASH_LINE
+
+    t0 = clock();
+    while (!key_pending() && (clock() - t0) < (clock_t)(CLOCKS_PER_SEC * 2))
+        ;
+    if (key_pending()) getch();
 }
