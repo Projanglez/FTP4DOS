@@ -999,6 +999,7 @@ static void print_usage(void)
     printf("  /S:OFF          do not save this connection\n");
     printf("  /Q              skip splash screen\n");
     printf("  /?              this help\n");
+    printf("\n(c) 2026 Projanglez -- https://github.com/Projanglez/ncftp386\n");
 }
 
 /* -------------------------------------------------------------------------
