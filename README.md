@@ -8,6 +8,7 @@ keyboard-driven in 80×25 text mode.
 
 ![NCFTP386 downloading DOOM.EXE](docs/screenshot.png)
 
+Download latest release here: <https://github.com/Projanglez/ncftp386/releases/latest>
 
 ## Features
 
