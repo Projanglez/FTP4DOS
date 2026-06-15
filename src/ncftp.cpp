@@ -36,6 +36,8 @@
 #include "i18n.h"
 #include "umlaut.h"   /* immer als letzter Include */
 
+#define APP_VERSION "0.9.0"
+
 /* ---- Bildschirm-Layout ---- */
 #define PANEL_TOP     0
 #define PANEL_ROWS    23           /* Zeilen 0..22                     */
@@ -67,6 +69,7 @@ static char g_pass[40]           = "";
 static int  g_savepw      = 1;   /* Passwort mitmerken (0 = nur Host/User)     */
 static int  g_saveconn    = 1;   /* 0 = diese Sitzung nicht in NCFTP.SAV       */
 static int  g_autoconnect = 0;   /* per Kommandozeile (-h) automatisch verbinden*/
+static int  g_nosplash    = 0;   /* /Q: Splash-Screen ueberspringen             */
 
 /* Kritischer-Fehler-Handler (INT 24h): verhindert die DOS-Abfrage
  * "Abort, Retry, Fail?" - z.B. bei einem leeren Diskettenlaufwerk. Statt den
@@ -983,8 +986,8 @@ static void do_drives(void)
 /* Kurzhilfe (/?) auf stdout - laeuft vor tui_init, daher normale Ausgabe. */
 static void print_usage(void)
 {
-    printf("NCFTP386 - Norton Commander style FTP client for DOS\n\n");
-    printf("Usage: NCFTP386 [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF]\n");
+    printf("NCFTP386 v" APP_VERSION " - Dual-Panel FTP Client for DOS\n\n");
+    printf("Usage: NCFTP386 [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF] [/Q]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
     printf("  /H:HOST         connect to HOST automatically on startup\n");
@@ -994,6 +997,7 @@ static void print_usage(void)
     printf("  /S:ALL          save connection incl. password to NCFTP386.SAV (default)\n");
     printf("  /S:NOPASS       save connection but not the password\n");
     printf("  /S:OFF          do not save this connection\n");
+    printf("  /Q              skip splash screen\n");
     printf("  /?              this help\n");
 }
 
@@ -1055,6 +1059,9 @@ int main(int argc, char *argv[])
                 else if (stricmp(val, "NOPASS") == 0) { g_saveconn = 1; g_savepw = 0; }
                 else if (stricmp(val, "ALL")    == 0) { g_saveconn = 1; g_savepw = 1; }
                 break;
+            case 'q':
+                g_nosplash = 1;
+                break;
             case '?':
                 want_help = 1;
                 break;
@@ -1077,6 +1084,8 @@ int main(int argc, char *argv[])
     g_right.attach(&g_ftp);
 
     tui_init();
+
+    if (!g_nosplash) dlg_splash(APP_VERSION);
 
     g_left.set_region(PANEL_TOP, 0,          PANEL_ROWS, PANEL_COLS);
     g_right.set_region(PANEL_TOP, PANEL_COLS, PANEL_ROWS, PANEL_COLS);
