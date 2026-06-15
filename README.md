@@ -131,3 +131,7 @@ additional release asset.
 ## Disclaimer
 
 This software is provided without any warranty; use at your own risk. See [LICENSE](LICENSE) (GPLv3, §15–16).
+
+## Development note
+
+This software was developed with the help of an AI coding assistant (Claude Code).
