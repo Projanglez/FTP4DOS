@@ -706,6 +706,8 @@ void dlg_splash(const char *version)
 
     sprintf(titlebuf, "NCFTP386  v%s", version ? version : "");
 
+    save_screen(dlg_screen);
+
     fill_rect(r, c, h, w, ' ', bg);
     draw_box(r, c, h, w, bg, 1);
 
@@ -723,7 +725,9 @@ void dlg_splash(const char *version)
 #undef SPLASH_LINE
 
     t0 = clock();
-    while (!key_pending() && (clock() - t0) < (clock_t)(CLOCKS_PER_SEC * 2))
+    while (!key_pending() && (clock() - t0) < (clock_t)(CLOCKS_PER_SEC * 10))
         ;
     if (key_pending()) getch();
+
+    restore_screen(dlg_screen);
 }

@@ -36,7 +36,7 @@
 #include "i18n.h"
 #include "umlaut.h"   /* immer als letzter Include */
 
-#define APP_VERSION "0.9.0"
+#define APP_VERSION "1.0.0"
 
 /* ---- Bildschirm-Layout ---- */
 #define PANEL_TOP     0
@@ -1085,8 +1085,6 @@ int main(int argc, char *argv[])
 
     tui_init();
 
-    if (!g_nosplash) dlg_splash(APP_VERSION);
-
     g_left.set_region(PANEL_TOP, 0,          PANEL_ROWS, PANEL_COLS);
     g_right.set_region(PANEL_TOP, PANEL_COLS, PANEL_ROWS, PANEL_COLS);
     g_left.refresh();
@@ -1094,6 +1092,8 @@ int main(int argc, char *argv[])
     set_active((Panel *)&g_left);
 
     redraw_all();
+
+    if (!g_nosplash) dlg_splash(APP_VERSION);
 
     /* Auto-Connect, wenn ein Host auf der Kommandozeile stand (-h).
      * Direkt nach dem Start ist der Packet-Treiber gerade erst eingehaengt und
