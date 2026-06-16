@@ -73,10 +73,15 @@ static unsigned long elapsedMs(clockTicks_t start) {
 }
 
 /* Datenverbindung 'ds' so weit wie moeglich in 'f' leeren (RETR-Download).
- * Das Empfangsfenster bleibt so offen; sonst faellt es unter eine MSS, der
- * Server stoppt (Silly-Window-Vermeidung) und mTCP oeffnet es erst nach seinem
- * ~5s-Persist-Timer wieder auf. Rueckgabe: >0 Bytes geschrieben (zu *total
- * addiert), 0 nichts da, -1 Schreibfehler, -2 Verbindung geschlossen. */
+ * Das Empfangsfenster bleibt so offen; sonst faellt es unter eine MSS bzw. auf 0,
+ * der Server stoppt (Silly Window Syndrome) und sendet bis zu seinem eigenen
+ * Persist-Probe (serverabhaengig, oft mehrere Sekunden) nichts mehr. mTCP selbst
+ * meldet das Fenster sofort wieder, sobald wir aus dem Null-Zustand recv()'en
+ * (TcpSocket::recv -> sendPureAck, mtcp/TCPLIB/TCP.CPP); mTCPs eigener Zero-Window-
+ * Probe-Intervall ist 1s (TCP_PROBE_INTERVAL, TCPINC/TCP.H) - einen 5s-Timer gibt
+ * es in mTCP nicht. Verhalten gegen mTCP 2025-01-10 verifiziert. Rueckgabe: >0
+ * Bytes geschrieben (zu *total addiert), 0 nichts da, -1 Schreibfehler, -2
+ * Verbindung geschlossen. */
 static int drainToFile(TcpSocket *ds, FILE *f, uint8_t *buf, int bufsz,
                        unsigned long *total) {
     int16_t n;
