@@ -5,9 +5,11 @@
 #
 # Voraussetzungen:
 #   - Open Watcom C/C++ installiert und im PATH (WATCOM env-Variable gesetzt)
-#   - mTCP-Quellen via: git clone https://github.com/retrohun/mTCP mtcp
+#   - Offizielle mTCP-Quellen (Version 2025-01-10) von der mTCP-Homepage:
+#       http://www.brutman.com/mTCP/mTCP.html
+#     Das Quellarchiv herunterladen und nach ./mtcp/ entpacken.
 #
-# Verzeichnisstruktur nach git clone:
+# Verzeichnisstruktur nach dem Entpacken:
 #   ./mtcp/TCPLIB/   = TCP/IP Bibliotheks-Quellen (.CPP)
 #   ./mtcp/TCPINC/   = TCP/IP Header-Dateien
 #   ./mtcp/INCLUDE/  = App-uebergreifende Includes
@@ -63,7 +65,8 @@ APP_OBJS = &
 # -----------------------------------------------------------------------------
 # mTCP-Kern-Objekte (aus TCPLIB/)
 # Orientiere dich an mtcp\APPS\FTP\makefile fuer die genaue Dateiliste.
-# Typische Kernbestandteile der 2015er Version:
+# Dateiliste der offiziellen 2025-01-10-Version. Gegenueber aelteren mTCP-
+# Staenden kam trace.obj als feste Abhaengigkeit des FTP-Clients hinzu.
 # -----------------------------------------------------------------------------
 MTCP_OBJS = &
     mtcp\TCPLIB\arp.obj &
@@ -75,6 +78,7 @@ MTCP_OBJS = &
     mtcp\TCPLIB\tcp.obj &
     mtcp\TCPLIB\tcpsockm.obj &
     mtcp\TCPLIB\timer.obj &
+    mtcp\TCPLIB\trace.obj &
     mtcp\TCPLIB\udp.obj &
     mtcp\TCPLIB\utils.obj
 
@@ -189,6 +193,9 @@ mtcp\TCPLIB\tcpsockm.obj: mtcp\TCPLIB\tcpsockm.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
 mtcp\TCPLIB\timer.obj: mtcp\TCPLIB\timer.cpp src\ncftp.cfg
+    $(CPP) $(MFLAGS) -fo=$@ $[@
+
+mtcp\TCPLIB\trace.obj: mtcp\TCPLIB\trace.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
 mtcp\TCPLIB\udp.obj: mtcp\TCPLIB\udp.cpp src\ncftp.cfg

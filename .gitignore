@@ -1,6 +1,12 @@
-# mTCP - externe Abhaengigkeit, wird per git clone geholt
-# (siehe CLAUDE.md: git clone https://github.com/retrohun/mTCP mtcp)
+# mTCP - externe Abhaengigkeit, NICHT im Repo.
+# Offizielle Quelle (Version 2025-01-10) von
+# http://www.brutman.com/mTCP/mTCP.html herunterladen und nach mtcp/
+# entpacken (siehe README.md / CLAUDE.md).
 mtcp/
+
+# Heruntergeladenes mTCP-Quellarchiv (entpackt) und Backup des alten Forks
+mTCP-src_*/
+mtcp_retrohun_bak/
 
 # Compiler-Zwischenergebnisse
 src/*.obj
