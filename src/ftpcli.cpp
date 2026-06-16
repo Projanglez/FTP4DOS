@@ -107,11 +107,23 @@ struct DrainCtx {
 /* Stack-Initialisierung (statisch, einmalig)                            */
 /* ===================================================================== */
 
+/* mTCP 2025-01-10: Utils::initStack installiert eigene Ctrl-Break (INT 1Bh)-
+ * und Ctrl-C (INT 23h)-Handler und verlangt dafuer echte Funktionszeiger
+ * (kein NULL, sonst Absturz). In der TUI sollen Ctrl-Break/Ctrl-C das
+ * Programm NICHT abbrechen; der Handler setzt nur ein Flag, das wir bewusst
+ * ignorieren. Utils::endStack stellt die Original-Handler wieder her. */
+static volatile uint8_t g_ctrlBreakDetected = 0;
+
+static void __interrupt __far ctrlBreakHandler(void) {
+    g_ctrlBreakDetected = 1;
+}
+
 int FtpClient::init_stack(void) {
     if (g_stackUp) return FTP_OK;
     /* Liest MTCPCFG env-Variable + Konfigurationsdatei. */
     if (Utils::parseEnv() != 0) return FTP_ERR_GENERAL;
-    if (Utils::initStack(TCP_MAX_SOCKETS, TCP_MAX_XMIT_BUFS) != 0) return FTP_ERR_GENERAL;
+    if (Utils::initStack(TCP_MAX_SOCKETS, TCP_MAX_XMIT_BUFS,
+                         ctrlBreakHandler, ctrlBreakHandler) != 0) return FTP_ERR_GENERAL;
     g_stackUp = 1;
     return FTP_OK;
 }

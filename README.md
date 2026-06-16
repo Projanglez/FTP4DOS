@@ -3,7 +3,7 @@
 A Norton Commander-style **dual-panel FTP client for MS-DOS** running on any
 x86 machine. The left panel shows the local DOS filesystem; the right panel
 connects to an FTP server via the
-[mTCP](https://github.com/retrohun/mTCP) TCP/IP stack — fully
+[mTCP](http://www.brutman.com/mTCP/mTCP.html) TCP/IP stack — fully
 keyboard-driven in 80×25 text mode.
 
 ![NCFTP386 downloading DOOM.EXE](docs/screenshot.png)
@@ -31,13 +31,15 @@ Download latest release here: <https://github.com/Projanglez/ncftp386/releases/l
 ## Building
 
 mTCP is an **external dependency** and is not part of this repository.
-Clone the fork used by this project into the `mtcp/` directory and check out
-the exact commit against which it was built and tested:
+This project builds against the **official mTCP, version 2025-01-10**.
+Download the source archive from the official mTCP home page (there is no
+official git repository) and extract it into the `mtcp/` directory:
 
-```sh
-git clone https://github.com/retrohun/mTCP mtcp
-git -C mtcp checkout ad9cd0f
-```
+- mTCP home page: <http://www.brutman.com/mTCP/mTCP.html>
+
+After extracting, the layout must be `mtcp/TCPLIB/`, `mtcp/TCPINC/`,
+`mtcp/INCLUDE/` and `mtcp/APPS/FTP/`. Always use the current official
+release rather than a third-party mirror.
 
 Then build with Open Watcom:
 
@@ -118,15 +120,17 @@ also licensed under the GPLv3.
 
 ### Third-party code / corresponding source
 
-mTCP © Michael B. Brutman — <https://www.brutman.com/mTCP/>
+mTCP © Michael B. Brutman — official home page:
+<http://www.brutman.com/mTCP/mTCP.html>
 
-This project uses the fork **[retrohun/mTCP](https://github.com/retrohun/mTCP)**,
-unmodified at commit
-[`ad9cd0f`](https://github.com/retrohun/mTCP/commit/ad9cd0f87ab151a1ce6f1a279f306bdf94163b21)
-(2018-08-20). That exact revision, together with the source in this repository,
-constitutes the complete corresponding source for any distributed binary
-(GPLv3 §6). Published releases include a copy of those mTCP sources as an
-additional release asset.
+This project builds against the **official mTCP, version 2025-01-10**,
+unmodified, obtained from the mTCP home page above. That exact source,
+together with the source in this repository, constitutes the complete
+corresponding source for any distributed binary (GPLv3 §6). Published
+releases include a copy of those mTCP sources as an additional release asset.
+
+Please download mTCP from the official home page to obtain the current
+version; always prefer the official release over any third-party mirror.
 
 ## Disclaimer
 
