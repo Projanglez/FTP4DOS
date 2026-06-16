@@ -36,7 +36,7 @@
 #include "i18n.h"
 #include "umlaut.h"   /* immer als letzter Include */
 
-#define APP_VERSION "1.0.0"
+#define APP_VERSION "0.9.0"
 
 /* ---- Bildschirm-Layout ---- */
 #define PANEL_TOP     0
