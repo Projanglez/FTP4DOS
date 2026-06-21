@@ -64,7 +64,7 @@ FTP4DOS.EXE
 ### Command-line parameters
 
 ```
-FTP4DOS [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF] [/MONO|/COLOR]   (or /?)
+FTP4DOS [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF] [/Q] [/MONO|/COLOR]   (or /?)
 ```
 
 Both `/` and `-` are accepted as the flag prefix. Flags are **case-insensitive**;
@@ -80,6 +80,9 @@ values are passed through as-is (username and password are case-sensitive).
 | `/S:ALL` | Save connection including password to `FTP4DOS.SAV` (default) |
 | `/S:NOPASS` | Save connection but not the password |
 | `/S:OFF` | Do not save this connection |
+| `/Q` | Skip the splash screen |
+| `/MONO` | Force monochrome display (MDA/Hercules) |
+| `/COLOR` | Force color display (default: auto-detect) |
 | `/?` | Show brief help |
 
 ### Saved connection
@@ -99,6 +102,7 @@ encrypted — and FTP transmits passwords in plain text anyway.
 | Tab | Switch active panel |
 | Ctrl+U | Swap panels left/right (remembered) |
 | Arrow keys / PgUp PgDn | Move selection |
+| Home / End | Jump to first / last entry |
 | Ins | Mark entry (for multi-file copy/delete) |
 | * (numpad) | Invert selection |
 | + (numpad) | Mark files missing or different in the other panel |
