@@ -36,20 +36,6 @@ void LocalPanel::read_cwd()
     }
 }
 
-/* qsort comparator: ".." first, then directories, then files,
- * each alphabetically (case-insensitive). */
-int LocalPanel::compare(const void *a, const void *b)
-{
-    const PanelEntry *ea = (const PanelEntry *)a;
-    const PanelEntry *eb = (const PanelEntry *)b;
-
-    if (ea->is_parent != eb->is_parent)
-        return ea->is_parent ? -1 : 1;
-    if (ea->is_dir != eb->is_dir)
-        return ea->is_dir ? -1 : 1;
-    return stricmp(ea->name, eb->name);
-}
-
 /* Re-read the directory. Returns: number of entries. */
 int LocalPanel::refresh()
 {
@@ -81,7 +67,7 @@ int LocalPanel::refresh()
         rc = _dos_findnext(&ff);
     }
 
-    qsort(entries, count, sizeof(PanelEntry), compare);
+    sort_entries();
 
     cursor = 0;
     topentry = 0;

@@ -43,8 +43,10 @@ enum FtpState {
 /* Callback: called once per raw text line of a LIST output (without CRLF). */
 typedef void (*FtpLineCb)(void *ctx, const char *line);
 
-/* Callback: progress during transfers. total==0 => unknown. */
-typedef void (*FtpProgressCb)(void *ctx, unsigned long sofar, unsigned long total);
+/* Callback: progress during transfers. total==0 => unknown size.
+ * Return value: 0 = continue, non-zero = user requested abort (the transfer
+ * is cancelled and retr()/stor() return FTP_ERR_ABORT). */
+typedef int (*FtpProgressCb)(void *ctx, unsigned long sofar, unsigned long total);
 
 
 #define FTP_HOST_MAX    64

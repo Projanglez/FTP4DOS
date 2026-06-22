@@ -52,8 +52,6 @@ private:
     /* LIST callback (ftpcli calls this for every raw line). */
     static void on_line(void *ctx, const char *line);
     void add_line(const char *line);
-
-    static int compare(const void *a, const void *b);  /* qsort comparator */
 };
 
 #endif /* RPANEL_H */

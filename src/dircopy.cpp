@@ -144,6 +144,7 @@ int dircopy_upload(FtpClient *ftp, const char *localDir, const char *remoteName,
 struct DcEnt {
     char          name[PANEL_NAME_MAX];
     unsigned char is_dir;
+    unsigned long size;        /* file size in bytes (0 for directories) */
 };
 
 struct DcCollect {
@@ -172,6 +173,7 @@ static void dc_on_line(void *vctx, const char *line)
     strncpy(c->arr[c->count].name, e.name, PANEL_NAME_MAX - 1);
     c->arr[c->count].name[PANEL_NAME_MAX - 1] = '\0';
     c->arr[c->count].is_dir = e.is_dir;
+    c->arr[c->count].size   = e.is_dir ? 0UL : e.size;
     c->count++;
 }
 
@@ -269,9 +271,12 @@ int dircopy_download(FtpClient *ftp, const char *remotePath, const char *localDi
 }
 
 /* ------------------------------------------------------------------ */
-/* Tree count (for the delete warning)                                 */
+/* Tree measure (files + subdirs + total bytes)                        */
+/* Used both for the confirm-dialog totals and the batch progress.     */
+/* The root directory is NOT counted here (the caller adds it).         */
 /* ------------------------------------------------------------------ */
-static int count_local_recurse(const char *dir, unsigned *nf, unsigned *nd, int depth)
+static int measure_local_recurse(const char *dir, unsigned *nf, unsigned *nd,
+                                 unsigned long *bytes, int depth)
 {
     struct find_t ff;
     char     pat[DC_PATHMAX];
@@ -287,9 +292,10 @@ static int count_local_recurse(const char *dir, unsigned *nf, unsigned *nd, int 
                 char child[DC_PATHMAX];
                 (*nd)++;
                 join_local(child, (int)sizeof(child), dir, ff.name);
-                count_local_recurse(child, nf, nd, depth + 1);
+                measure_local_recurse(child, nf, nd, bytes, depth + 1);
             } else {
                 (*nf)++;
+                *bytes += ff.size;
             }
         }
         rc = _dos_findnext(&ff);
@@ -297,14 +303,15 @@ static int count_local_recurse(const char *dir, unsigned *nf, unsigned *nd, int 
     return FTP_OK;
 }
 
-int dircopy_count_local(const char *path, unsigned *nfiles, unsigned *ndirs)
+int dircopy_measure_local(const char *path, unsigned *nfiles, unsigned *ndirs,
+                          unsigned long *bytes)
 {
-    (*ndirs)++;                          /* the root directory itself */
-    return count_local_recurse(path, nfiles, ndirs, 0);
+    return measure_local_recurse(path, nfiles, ndirs, bytes, 0);
 }
 
-static int count_remote_recurse(FtpClient *ftp, const char *dir,
-                                unsigned *nf, unsigned *nd, int depth)
+static int measure_remote_recurse(FtpClient *ftp, const char *dir,
+                                  unsigned *nf, unsigned *nd,
+                                  unsigned long *bytes, int depth)
 {
     DcCollect col;
     char    (*subs)[PANEL_NAME_MAX] = 0;
@@ -322,7 +329,8 @@ static int count_remote_recurse(FtpClient *ftp, const char *dir,
     if (rc != FTP_OK) { free(col.arr); return rc; }
 
     for (i = 0; i < col.count; i++) {
-        if (col.arr[i].is_dir) (*nd)++; else (*nf)++;
+        if (col.arr[i].is_dir) (*nd)++;
+        else { (*nf)++; *bytes += col.arr[i].size; }
     }
     nsub = extract_subdirs(&col, &subs);
     free(col.arr);
@@ -330,18 +338,17 @@ static int count_remote_recurse(FtpClient *ftp, const char *dir,
     for (j = 0; j < nsub; j++) {
         char child[DC_PATHMAX];
         join_remote(child, (int)sizeof(child), dir, subs[j]);
-        rc = count_remote_recurse(ftp, child, nf, nd, depth + 1);
+        rc = measure_remote_recurse(ftp, child, nf, nd, bytes, depth + 1);
         if (rc != FTP_OK) break;
     }
     if (subs) free(subs);
     return rc;
 }
 
-int dircopy_count_remote(FtpClient *ftp, const char *path,
-                         unsigned *nfiles, unsigned *ndirs)
+int dircopy_measure_remote(FtpClient *ftp, const char *path,
+                           unsigned *nfiles, unsigned *ndirs, unsigned long *bytes)
 {
-    (*ndirs)++;                          /* the root directory itself */
-    return count_remote_recurse(ftp, path, nfiles, ndirs, 0);
+    return measure_remote_recurse(ftp, path, nfiles, ndirs, bytes, 0);
 }
 
 /* ------------------------------------------------------------------ */

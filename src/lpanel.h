@@ -24,7 +24,6 @@ private:
     char cwd[PANEL_HEADER_MAX]; /* current working directory (with drive)    */
 
     void read_cwd();            /* fetch cwd from DOS                         */
-    static int compare(const void *a, const void *b); /* qsort comparator    */
 };
 
 #endif /* LPANEL_H */
