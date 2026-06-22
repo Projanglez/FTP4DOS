@@ -106,6 +106,88 @@ static int clamp_cols(int content_w)
 }
 
 /* -------------------------------------------------------------------------
+ * Shared single-line text editor (used by every input field)
+ * -----------------------------------------------------------------------------
+ * Full line editing: Left/Right, Home/End, Del, Backspace (mid-line) and
+ * insert at the caret. The visible window scrolls horizontally to keep the
+ * caret on screen. Drawing and key handling are split so multi-field dialogs
+ * (the connect form) can drive several fields from one keyboard loop.
+ * ---------------------------------------------------------------------- */
+struct EditField {
+    char *buf;        /* edited buffer (size maxlen+1)        */
+    int   maxlen;     /* maximum characters                   */
+    int   len;        /* current length                       */
+    int   caret;      /* caret position 0..len                */
+    int   start;      /* index of the first visible character */
+};
+
+static void editfield_init(EditField *f, char *buf, int maxlen)
+{
+    f->buf = buf;
+    f->maxlen = maxlen;
+    f->len = (int)strlen(buf);
+    if (f->len > maxlen) { f->len = maxlen; buf[f->len] = '\0'; }
+    f->caret = f->len;
+    f->start = 0;
+}
+
+/* Draw the field into a row/col/width region; keeps the caret visible. When
+ * focused, positions the hardware cursor (caller must have show_cursor(1)). */
+static void editfield_draw(EditField *f, int row, int col, int width,
+                           unsigned char attr, int is_password, int focused)
+{
+    int vis, j;
+    if (width < 1) width = 1;
+    if (f->caret < f->start)                 f->start = f->caret;
+    else if (f->caret > f->start + width - 1) f->start = f->caret - width + 1;
+    if (f->start < 0) f->start = 0;
+
+    vis = f->len - f->start;
+    if (vis > width) vis = width;
+    fill_rect(row, col, 1, width, ' ', attr);
+    for (j = 0; j < vis; j++) {
+        char c = is_password ? '*' : f->buf[f->start + j];
+        putchar_at(row, col + j, c, attr);
+    }
+    if (focused) set_cursor(row, col + (f->caret - f->start));
+}
+
+/* Handle one key. Returns 1 if it was an edit/caret key (consumed), 0 if the
+ * caller should handle it (Enter/Tab/Esc/Space-on-checkbox/...). */
+static int editfield_key(EditField *f, int k)
+{
+    switch (k) {
+    case KEY_LEFT:  if (f->caret > 0)      f->caret--; return 1;
+    case KEY_RIGHT: if (f->caret < f->len) f->caret++; return 1;
+    case KEY_HOME:  f->caret = 0;          return 1;
+    case KEY_END:   f->caret = f->len;     return 1;
+    case KEY_BACKSP:
+        if (f->caret > 0) {
+            memmove(f->buf + f->caret - 1, f->buf + f->caret,
+                    (unsigned)(f->len - f->caret + 1));   /* tail incl. NUL */
+            f->caret--; f->len--;
+        }
+        return 1;
+    case KEY_DEL:
+        if (f->caret < f->len) {
+            memmove(f->buf + f->caret, f->buf + f->caret + 1,
+                    (unsigned)(f->len - f->caret));        /* tail incl. NUL */
+            f->len--;
+        }
+        return 1;
+    default:
+        if (k >= 0x20 && k <= 0x7E && f->len < f->maxlen) {
+            memmove(f->buf + f->caret + 1, f->buf + f->caret,
+                    (unsigned)(f->len - f->caret + 1));    /* shift incl. NUL */
+            f->buf[f->caret] = (char)k;
+            f->caret++; f->len++;
+            return 1;
+        }
+        return 0;
+    }
+}
+
+/* -------------------------------------------------------------------------
  * Notice/error box
  * ---------------------------------------------------------------------- */
 void dlg_message(const char *title, const char *msg, int is_error)
@@ -224,7 +306,8 @@ int dlg_input(const char *title, const char *prompt,
     int promptlen = prompt ? (int)strlen(prompt) : 0;
     int hintlen   = (int)strlen(hint);
     int fieldw, w, cols, rows, top, left, frow, fcol;
-    int len, result;
+    int result;
+    EditField ef;
     unsigned char bg = ATTR_DIALOG_BG;
 
     fieldw = maxlen;
@@ -243,8 +326,7 @@ int dlg_input(const char *title, const char *prompt,
     frow = top + 2;
     fcol = left + 2;
 
-    len = (int)strlen(buf);
-    if (len > maxlen) { len = maxlen; buf[len] = '\0'; }
+    editfield_init(&ef, buf, maxlen);
 
     save_screen(dlg_screen);
     draw_dialog_frame(top, left, rows, cols, title, bg);
@@ -253,30 +335,75 @@ int dlg_input(const char *title, const char *prompt,
 
     show_cursor(1);
     for (;;) {
-        int caret = len;
-        int start = (caret > fieldw - 1) ? (caret - (fieldw - 1)) : 0;
-        int vis   = len - start;
-        int i, k;
-
-        if (vis > fieldw) vis = fieldw;
-        fill_rect(frow, fcol, 1, fieldw, ' ', ATTR_DIALOG_HL);
-        for (i = 0; i < vis; i++) {
-            char c = is_password ? '*' : buf[start + i];
-            putchar_at(frow, fcol + i, c, ATTR_DIALOG_HL);
-        }
-        set_cursor(frow, fcol + (caret - start));
-
+        int k;
+        editfield_draw(&ef, frow, fcol, fieldw, ATTR_DIALOG_HL, is_password, 1);
         k = readkey();
         if (k == KEY_ENTER) { result = 1; break; }
         if (k == KEY_ESC)   { result = 0; break; }
-        if (k == KEY_BACKSP) {
-            if (len > 0) { len--; buf[len] = '\0'; }
-            continue;
-        }
-        if (k >= 0x20 && k <= 0x7E && len < maxlen) {
-            buf[len++] = (char)k;
-            buf[len] = '\0';
-        }
+        editfield_key(&ef, k);
+    }
+    show_cursor(0);
+    restore_screen(dlg_screen);
+    return result;
+}
+
+/* -------------------------------------------------------------------------
+ * Checksum result dialog: two read-only sum lines + editable filename field.
+ * Shares the dlg_input edit-loop logic (single line, no password).
+ * ---------------------------------------------------------------------- */
+int dlg_checksum(const char *title, const char *crc, const char *md5,
+                 char *fnamebuf, int maxlen)
+{
+    const char *crclbl = "CRC32: ";
+    const char *md5lbl = "MD5:   ";
+    const char *savelbl = L("Save to file:", "In Datei speichern:");
+    const char *hint = L("[Enter] Save   [Esc] Close (no file)",
+                         "[Enter] Speichern   [Esc] Schlie" ss "en (keine Datei)");
+    char crcline[16 + 12];
+    char md5line[40 + 12];
+    int fieldw, w, cols, rows, top, left, frow, fcol;
+    int result;
+    EditField ef;
+    unsigned char bg = ATTR_DIALOG_BG;
+
+    sprintf(crcline, "%s%s", crclbl, crc ? crc : "");
+    sprintf(md5line, "%s%s", md5lbl, md5 ? md5 : "");
+
+    fieldw = maxlen;
+    if (fieldw > 40) fieldw = 40;
+    if (fieldw < 8)  fieldw = 8;
+
+    w = (int)strlen(md5line);                       /* widest fixed line */
+    if ((int)strlen(crcline) > w) w = (int)strlen(crcline);
+    if ((int)strlen(hint)    > w) w = (int)strlen(hint);
+    if ((int)strlen(savelbl) > w) w = (int)strlen(savelbl);
+    if (fieldw > w) w = fieldw;
+    if (title) { int t = (int)strlen(title); if (t > w) w = t; }
+
+    cols = clamp_cols(w);
+    rows = 9;            /* border,crc,md5,blank,label,field,blank,hint,border */
+    top  = (SCREEN_ROWS - rows) / 2;
+    left = (SCREEN_COLS - cols) / 2;
+    frow = top + 5;
+    fcol = left + 2;
+
+    editfield_init(&ef, fnamebuf, maxlen);
+
+    save_screen(dlg_screen);
+    draw_dialog_frame(top, left, rows, cols, title, bg);
+    draw_text(top + 1, left + 2, crcline,  bg, cols - 4);
+    draw_text(top + 2, left + 2, md5line,  bg, cols - 4);
+    draw_text(top + 4, left + 2, savelbl,  bg, cols - 4);
+    draw_text(top + 7, left + 2, hint,     bg, cols - 4);
+
+    show_cursor(1);
+    for (;;) {
+        int k;
+        editfield_draw(&ef, frow, fcol, fieldw, ATTR_DIALOG_HL, 0, 1);
+        k = readkey();
+        if (k == KEY_ENTER) { result = 1; break; }
+        if (k == KEY_ESC)   { result = 0; break; }
+        editfield_key(&ef, k);
     }
     show_cursor(0);
     restore_screen(dlg_screen);
@@ -290,14 +417,18 @@ int dlg_input(const char *title, const char *prompt,
  * dialog is never open at the same time as another one (dlg_input closes
  * before the transfer starts, dlg_error only opens afterwards).
  * ---------------------------------------------------------------------- */
-static int           prog_active = 0;
-static int           prog_top, prog_left, prog_cols, prog_rows;
-static int           prog_barrow, prog_barw;
-static long          prog_lastpct;     /* last drawn %, -1 = never drawn yet  */
-static unsigned long prog_lastunit;    /* last drawn 8 KB unit                */
+static int  prog_active = 0;
+static int  prog_top, prog_left, prog_cols, prog_rows;
+static int  prog_batch;            /* 1 => the batch total lines are present  */
+static int  prog_barw;
+/* Absolute screen rows of the content lines (computed in begin()). */
+static int  prog_filerow, prog_barrow, prog_raterow;
+static int  prog_totalrow, prog_batchbarrow, prog_footrow;
+static long prog_lastpct;          /* last drawn per-file %, -1 = none        */
+static long prog_lastbatchpct;     /* last drawn batch %, -1 = none           */
 
-/* Draw the "[####....] NNN%" bar in the bar row (0xDB full, 0xB0 empty). */
-static void prog_draw_bar(long pct)
+/* Draw a "[####....] NNN%" bar on screen row 'row' (0xDB full, 0xB0 empty). */
+static void prog_draw_bar(int row, long pct)
 {
     char bar[84];
     int  i, o = 0, fill;
@@ -313,72 +444,171 @@ static void prog_draw_bar(long pct)
     bar[o++] = ']';
     o += sprintf(bar + o, " %3ld%%", pct);
     bar[o] = '\0';
-    draw_text(prog_barrow, prog_left + 2, bar, ATTR_DIALOG_BG, prog_cols - 4);
+    draw_text(row, prog_left + 2, bar, ATTR_DIALOG_BG, prog_cols - 4);
 }
 
-void dlg_progress_begin(const char *title, const char *fromname)
+/* bytes/sec -> compact "1.2M/s" / "523K/s" / "12B/s". */
+static void format_rate(unsigned long bps, char *out)
 {
-    char buf[80];
+    char dec = g_locale.decimal_sep;
+    if (bps >= 1048576UL)
+        sprintf(out, "%lu%c%luM/s", bps / 1048576UL,
+                dec, (bps % 1048576UL) * 10UL / 1048576UL);
+    else if (bps >= 1024UL)
+        sprintf(out, "%luK/s", bps / 1024UL);
+    else
+        sprintf(out, "%luB/s", bps);
+}
+
+/* seconds -> "MM:SS" or "H:MM:SS"; "--:--" when negative/unknown. */
+static void format_eta(long sec, char *out)
+{
+    if (sec < 0) { strcpy(out, "--:--"); return; }
+    if (sec >= 3600L)
+        sprintf(out, "%ld:%02ld:%02ld", sec / 3600L, (sec / 60L) % 60L, sec % 60L);
+    else
+        sprintf(out, "%02ld:%02ld", sec / 60L, sec % 60L);
+}
+
+/* bytes -> compact decimal "12.5M" / "999K" / "512" (1000-based). */
+static void format_bytes_compact(unsigned long n, char *out)
+{
+    char dec = g_locale.decimal_sep;
+    if (n >= 1000000000UL)
+        sprintf(out, "%lu%c%luG", n / 1000000000UL, dec, (n % 1000000000UL) / 100000000UL);
+    else if (n >= 1000000UL)
+        sprintf(out, "%lu%c%luM", n / 1000000UL, dec, (n % 1000000UL) / 100000UL);
+    else if (n >= 1000UL)
+        sprintf(out, "%luK", n / 1000UL);
+    else
+        sprintf(out, "%lu", n);
+}
+
+/* Overflow-safe percentage (handles >42 MB totals on 16-bit). */
+static long prog_pct(unsigned long sofar, unsigned long total)
+{
+    if (sofar >= total)          return 100;
+    if (total > 42000000UL)      return (long)(sofar / (total / 100UL));
+    return (long)((sofar * 100UL) / total);
+}
+
+void dlg_progress_begin(const char *title, int batch)
+{
     unsigned char bg = ATTR_DIALOG_BG;
+    int row;
 
     prog_cols = 50;
     if (prog_cols > SCREEN_COLS - 2) prog_cols = SCREEN_COLS - 2;
-    prog_rows = 4;                          /* border, file line, bar, border */
+    prog_batch = batch ? 1 : 0;
+    /* content rows: file, bar, rate [, total, batch-bar], footer */
+    prog_rows = prog_batch ? 8 : 6;
     prog_top  = (SCREEN_ROWS - prog_rows) / 2;
     prog_left = (SCREEN_COLS - prog_cols) / 2;
-    prog_barrow = prog_top + 2;
-    prog_barw   = (prog_cols - 4) - 7;      /* remainder for "[" "]" " 100%"      */
+    prog_barw = (prog_cols - 4) - 7;        /* remainder for "[" "]" " 100%" */
     if (prog_barw < 4) prog_barw = 4;
-    prog_lastpct  = -1;
-    prog_lastunit = (unsigned long)-1L;
-    prog_active   = 1;
+
+    row = prog_top + 1;
+    prog_filerow = row++;
+    prog_barrow  = row++;
+    prog_raterow = row++;
+    if (prog_batch) {
+        prog_totalrow    = row++;
+        prog_batchbarrow = row++;
+    } else {
+        prog_totalrow = prog_batchbarrow = -1;
+    }
+    prog_footrow = row++;
+
+    prog_lastpct      = -1;
+    prog_lastbatchpct = -1;
+    prog_active       = 1;
 
     save_screen(prog_screen);
     draw_dialog_frame(prog_top, prog_left, prog_rows, prog_cols, title, bg);
 
-    sprintf(buf, L("File: %.34s", "Datei: %.34s"), fromname ? fromname : "");
-    draw_text(prog_top + 1, prog_left + 2, buf, bg, prog_cols - 4);
-    prog_draw_bar(0);
+    draw_text(prog_filerow, prog_left + 2, L("File:", "Datei:"), bg, prog_cols - 4);
+    prog_draw_bar(prog_barrow, 0);
+    /* The rate line and the "P=Pause ESC=Cancel" footer are drawn by
+     * dlg_progress_update(), i.e. only for real transfers (not delete/move). */
 }
 
-void dlg_progress_update(unsigned long sofar, unsigned long total)
+void dlg_progress_update(const ProgressInfo *pi)
 {
-    if (!prog_active) return;
+    unsigned char bg = ATTR_DIALOG_BG;
+    char buf[80], a[24], b[24], c[24];
 
-    if (total > 0) {
-        /* Compute the percentage, overflow-safe for large files. */
-        unsigned long pct;
-        if (sofar >= total)          pct = 100;
-        else if (total > 42000000UL) pct = sofar / (total / 100UL);
-        else                         pct = (sofar * 100UL) / total;
+    if (!prog_active || !pi) return;
 
-        if ((long)pct == prog_lastpct) return;   /* only redraw on a change */
-        prog_lastpct = (long)pct;
-        prog_draw_bar((long)pct);
+    /* Per-file bar (or a byte counter when the size is unknown). */
+    if (pi->file_total > 0) {
+        long pct = prog_pct(pi->file_sofar, pi->file_total);
+        if (pct != prog_lastpct) { prog_lastpct = pct; prog_draw_bar(prog_barrow, pct); }
     } else {
-        /* Unknown size: bytes transferred, updated every 8 KB. */
-        char buf[80];
-        unsigned long unit = sofar >> 13;
-        if (unit == prog_lastunit) return;
-        prog_lastunit = unit;
-        sprintf(buf, L("%lu bytes transferred ...", "%lu Bytes " ue "bertragen ..."), sofar);
-        fill_rect(prog_barrow, prog_left + 2, 1, prog_cols - 4, ' ', ATTR_DIALOG_BG);
-        draw_text(prog_barrow, prog_left + 2, buf, ATTR_DIALOG_BG, prog_cols - 4);
+        format_bytes_compact(pi->file_sofar, a);
+        sprintf(buf, L("%s transferred ...", "%s " ue "bertragen ..."), a);
+        fill_rect(prog_barrow, prog_left + 2, 1, prog_cols - 4, ' ', bg);
+        draw_text(prog_barrow, prog_left + 2, buf, bg, prog_cols - 4);
     }
+
+    /* Current / average rate and per-file ETA. */
+    format_rate(pi->cur_speed, a);
+    format_rate(pi->avg_speed, b);
+    format_eta(pi->file_eta_sec, c);
+    /* German "avg" symbol: CP850/German-DOS char 155 = 'ø'. Own literal so the
+     * \x escape does not absorb the following space as a hex digit. */
+    sprintf(buf, L("%s  avg %s  ETA %s", "%s  " "\x9B" " %s  Rest %s"), a, b, c);
+    fill_rect(prog_raterow, prog_left + 2, 1, prog_cols - 4, ' ', bg);
+    draw_text(prog_raterow, prog_left + 2, buf, bg, prog_cols - 4);
+
+    /* All-files (batch) total + bar. */
+    if (prog_batch && prog_totalrow >= 0) {
+        format_bytes_compact(pi->batch_sofar, a);
+        if (pi->batch_total > 0) {
+            format_bytes_compact(pi->batch_total, b);
+            format_eta(pi->batch_eta_sec, c);
+            sprintf(buf, L("All: %s / %s  ETA %s", "Ges: %s / %s  Rest %s"), a, b, c);
+        } else {
+            sprintf(buf, L("All: %s", "Ges: %s"), a);
+        }
+        fill_rect(prog_totalrow, prog_left + 2, 1, prog_cols - 4, ' ', bg);
+        draw_text(prog_totalrow, prog_left + 2, buf, bg, prog_cols - 4);
+
+        if (pi->batch_total > 0) {
+            long pct = prog_pct(pi->batch_sofar, pi->batch_total);
+            if (pct != prog_lastbatchpct) {
+                prog_lastbatchpct = pct;
+                prog_draw_bar(prog_batchbarrow, pct);
+            }
+        }
+    }
+
+    /* Footer: paused banner or the key hints. */
+    fill_rect(prog_footrow, prog_left + 2, 1, prog_cols - 4, ' ', bg);
+    if (pi->paused)
+        draw_text(prog_footrow, prog_left + 2,
+                  L("*** PAUSED ***  P=resume  ESC=cancel",
+                    "*** PAUSE ***  P=weiter  ESC=Abbruch"), ATTR_DIALOG_HL, prog_cols - 4);
+    else
+        draw_text(prog_footrow, prog_left + 2,
+                  L("P=Pause  ESC=Cancel", "P=Pause  ESC=Abbruch"), bg, prog_cols - 4);
 }
 
-void dlg_progress_setfile(const char *name)
+void dlg_progress_setfile(const char *name, int idx, int count)
 {
     char buf[80];
+    unsigned char bg = ATTR_DIALOG_BG;
     if (!prog_active) return;
 
-    prog_lastpct  = -1;
-    prog_lastunit = (unsigned long)-1L;
+    prog_lastpct = -1;
 
-    fill_rect(prog_top + 1, prog_left + 2, 1, prog_cols - 4, ' ', ATTR_DIALOG_BG);
-    sprintf(buf, L("File: %.34s", "Datei: %.34s"), name ? name : "");
-    draw_text(prog_top + 1, prog_left + 2, buf, ATTR_DIALOG_BG, prog_cols - 4);
-    prog_draw_bar(0);
+    fill_rect(prog_filerow, prog_left + 2, 1, prog_cols - 4, ' ', bg);
+    if (count > 1)
+        sprintf(buf, L("File: %.26s (%d/%d)", "Datei: %.26s (%d/%d)"),
+                name ? name : "", idx, count);
+    else
+        sprintf(buf, L("File: %.34s", "Datei: %.34s"), name ? name : "");
+    draw_text(prog_filerow, prog_left + 2, buf, bg, prog_cols - 4);
+    prog_draw_bar(prog_barrow, 0);
 }
 
 void dlg_progress_end(void)
@@ -546,7 +776,7 @@ int dlg_connect(const char *title,
     /* Text fields */
     char *fbufs[4];
     int   fmaxs[4];
-    int   flens[4];
+    EditField efs[4];
     int   frows[4];
     const char *flbls[4];
     int   is_pw[4];
@@ -564,10 +794,8 @@ int dlg_connect(const char *title,
 
     is_pw[0] = 0; is_pw[1] = 0; is_pw[2] = 0; is_pw[3] = 1;
 
-    for (i = 0; i < 4; i++) {
-        flens[i] = (int)strlen(fbufs[i]);
-        if (flens[i] > fmaxs[i]) { flens[i] = fmaxs[i]; fbufs[i][flens[i]] = '\0'; }
-    }
+    for (i = 0; i < 4; i++)
+        editfield_init(&efs[i], fbufs[i], fmaxs[i]);
 
     /* Checkbox state (local; only written to *save_conn/*save_pass on OK) */
     int chk_save = *save_conn;
@@ -608,19 +836,7 @@ int dlg_connect(const char *title,
         for (i = 0; i < 4; i++) {
             int is_focused = (focus == i);
             unsigned char fa = is_focused ? ATTR_DIALOG_HL : bg;
-            int len   = flens[i];
-            int caret = len;
-            int start = (caret >= fdw) ? (caret - fdw + 1) : 0;
-            int vis   = len - start;
-            int j;
-            if (vis > fdw) vis = fdw;
-            fill_rect(frows[i], fcol, 1, fdw, ' ', fa);
-            for (j = 0; j < vis; j++) {
-                char c = is_pw[i] ? '*' : fbufs[i][start + j];
-                putchar_at(frows[i], fcol + j, c, fa);
-            }
-            if (is_focused)
-                set_cursor(frows[i], fcol + (caret - start));
+            editfield_draw(&efs[i], frows[i], fcol, fdw, fa, is_pw[i], is_focused);
         }
 
         /* Checkboxes */
@@ -654,15 +870,8 @@ int dlg_connect(const char *title,
 
         /* Focus-specific input */
         if (focus >= 0 && focus <= 3) {
-            int fi = focus;
-            if (k == KEY_ENTER) {
-                focus = (focus + 1) % NFOCUS;
-            } else if (k == KEY_BACKSP) {
-                if (flens[fi] > 0) { flens[fi]--; fbufs[fi][flens[fi]] = '\0'; }
-            } else if (k >= 0x20 && k <= 0x7E && flens[fi] < fmaxs[fi]) {
-                fbufs[fi][flens[fi]++] = (char)k;
-                fbufs[fi][flens[fi]]   = '\0';
-            }
+            if (k == KEY_ENTER) focus = (focus + 1) % NFOCUS;
+            else                editfield_key(&efs[focus], k);
         } else if (focus == 4) {
             if (k == KEY_ENTER || k == ' ') {
                 chk_save = !chk_save;

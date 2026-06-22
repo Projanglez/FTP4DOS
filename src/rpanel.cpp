@@ -136,19 +136,6 @@ RemotePanel::RemotePanel()
 }
 
 /* ------------------------------------------------------------------ */
-/* Sorting: ".." first, then directories, then files (alphabetically) */
-/* ------------------------------------------------------------------ */
-int RemotePanel::compare(const void *a, const void *b)
-{
-    const PanelEntry *ea = (const PanelEntry *)a;
-    const PanelEntry *eb = (const PanelEntry *)b;
-
-    if (ea->is_parent != eb->is_parent) return ea->is_parent ? -1 : 1;
-    if (ea->is_dir    != eb->is_dir)    return ea->is_dir    ? -1 : 1;
-    return stricmp(ea->name, eb->name);
-}
-
-/* ------------------------------------------------------------------ */
 /* Unix "ls -l" format                                                 */
 /* ------------------------------------------------------------------ */
 static int parse_unix(const char *line, int curYear, PanelEntry *e)
@@ -332,7 +319,7 @@ int RemotePanel::refresh()
     int rc = ftp->list(0, on_line, this);
     if (rc != FTP_OK) navFailed = 1;
 
-    qsort(entries, count, sizeof(PanelEntry), compare);
+    sort_entries();
     cursor = 0;
     topentry = 0;
     return count;

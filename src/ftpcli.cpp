@@ -681,7 +681,7 @@ int FtpClient::retr(const char *remote, const char *localpath,
         if (dr == -1) { ioerr = 1; break; }
         if (dr > 0) {
             start = TIMER_GET_CURRENT();
-            if (cb) cb(ctx, total, filesize);
+            if (cb && cb(ctx, total, filesize)) { ioerr = 3; break; }  /* user abort */
         }
         if (dr == -2) break;
         if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
@@ -693,6 +693,14 @@ int FtpClient::retr(const char *remote, const char *localpath,
 
     if (ioerr == 1) { remove(localpath); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
     if (ioerr == 2) { setError(L("Download timeout", "Zeit" ue "berschreitung beim Download")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+    if (ioerr == 3) {                       /* user abort: drop the partial file */
+        remove(localpath);
+        sendCmd("ABOR");                    /* tell the server, swallow its reply(s) */
+        code = readReply();                 /* 426 (aborted) or 226/225 */
+        if (code == 426) readReply();       /* usually followed by 226   */
+        state = FTP_IDLE;
+        return FTP_ERR_ABORT;
+    }
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;
@@ -757,11 +765,28 @@ int FtpClient::stor(const char *localpath, const char *remote,
         if (ioerr) break;
 
         sent += (unsigned long)r;
-        if (cb) cb(ctx, sent, fsize);
+        if (cb && cb(ctx, sent, fsize)) { ioerr = 4; break; }   /* user abort */
     }
     if (!ioerr && ferror(f)) ioerr = 1;
 
     fclose(f);
+
+    if (ioerr == 4) {                       /* user abort */
+        /* Send ABOR BEFORE closing the data connection. closeData() performs a
+         * graceful FIN, which the server reads as a clean end-of-file: it then
+         * COMPLETES the STOR (226) and separately acks the ABOR (225/226),
+         * leaving one reply unread and desyncing the control connection.
+         * Aborting while the data connection is still open makes the server
+         * abort deterministically (426 transfer aborted, then 226 ABOR ok) -
+         * mirroring the working RETR abort path. */
+        sendCmd("ABOR");
+        closeData(d);                       /* drop our (still-open) data conn */
+        code = readReply();                 /* 426 (aborted) or 226/225 */
+        if (code == 426) readReply();       /* usually followed by 226   */
+        state = FTP_IDLE;
+        return FTP_ERR_ABORT;
+    }
+
     closeData(d);                           /* blocking: flushes all data + FIN */
 
     if (ioerr == 1) { setError(L("Local read error", "Lokaler Lesefehler")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }

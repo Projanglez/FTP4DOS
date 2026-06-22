@@ -13,6 +13,7 @@
  * ===========================================================================*/
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   /* qsort */
 #include <ctype.h>
 
 #include "panel.h"
@@ -40,25 +41,42 @@ static void columns(int inner, ColLayout *c)
     if (c->name_w < 1) c->name_w = 1;               /* guard for mini panels  */
 }
 
-/* Write number n into buf with thousands separators (EN: comma, DE: dot).
- * n > 9,999,999: output in kilobytes, e.g. "20,000k". */
+/* Format a file size for the narrow 9-character panel column.
+ *   <= 9,999,999 : full digits grouped with the locale thousands separator
+ *   10 MB ..<1 GB: decimal megabytes, e.g. "10.0M" / "100M" / "954M"
+ *   >= 1 GB      : decimal gigabytes, e.g. "1.0G" / "4.0G"
+ * M/G are decimal (1000-based) units so the value matches the file's "GB"
+ * name; the result is always <= 6 chars and never overflows the column.
+ * The decimal point uses the locale separator (e.g. NL: "1,0G"). */
 static void fmt_size(char *buf, unsigned long n)
 {
-    unsigned long val = n;
-    char suffix = '\0';
     char raw[16];
-    const char *sep = L(",", ".");
-    int len, i, pos;
+    int  len, i, pos;
 
-    if (n > 9999999UL) { val = n / 1000UL; suffix = 'k'; }
-    sprintf(raw, "%lu", val);
+    if (n >= 1000000000UL) {                       /* gigabytes */
+        unsigned long whole = n / 1000000000UL;
+        unsigned long frac  = (n % 1000000000UL) / 100000000UL;  /* 1st decimal */
+        sprintf(buf, "%lu%c%luG", whole, g_locale.decimal_sep, frac);
+        return;
+    }
+    if (n > 9999999UL) {                            /* megabytes */
+        unsigned long mb = n / 1000000UL;
+        if (mb < 100UL) {
+            unsigned long frac = (n % 1000000UL) / 100000UL;     /* 1st decimal */
+            sprintf(buf, "%lu%c%luM", mb, g_locale.decimal_sep, frac);
+        } else {
+            sprintf(buf, "%luM", mb);
+        }
+        return;
+    }
+
+    sprintf(raw, "%lu", n);                         /* full grouped digits */
     len = (int)strlen(raw);
     pos = 0;
     for (i = 0; i < len; i++) {
-        if (i > 0 && (len - i) % 3 == 0) buf[pos++] = sep[0];
+        if (i > 0 && (len - i) % 3 == 0) buf[pos++] = g_locale.thousands_sep;
         buf[pos++] = raw[i];
     }
-    if (suffix) buf[pos++] = suffix;
     buf[pos] = '\0';
 }
 
@@ -80,15 +98,93 @@ static void place(char *out, int off, const char *s, int w, int rightalign)
 /* -------------------------------------------------------------------------
  * Constructor / destructor / geometry
  * ---------------------------------------------------------------------- */
+const Panel *Panel::s_sortctx = 0;
+
 Panel::Panel()
 {
     top = 1; left = 0; height = 21; width = 40;
     count = 0; cursor = 0; topentry = 0; active = 0;
     header[0] = '\0';
+    s_key = SORT_NAME; s_desc = 0;
 }
 
 Panel::~Panel()
 {
+}
+
+/* -------------------------------------------------------------------------
+ * Sorting (configurable per panel)
+ * ---------------------------------------------------------------------- */
+/* Extension = the part after the last '.', ignoring a leading dot (so dotfiles
+ * have no extension). Returns "" when there is none. */
+static const char *name_ext(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    if (dot == 0 || dot == name) return "";
+    return dot + 1;
+}
+
+/* Compare two DOS date/time words (already chronological as integers). */
+static int cmp_u(unsigned a, unsigned b)
+{
+    return (a < b) ? -1 : (a > b) ? 1 : 0;
+}
+
+int Panel::sort_compare(const void *a, const void *b)
+{
+    const PanelEntry *ea = (const PanelEntry *)a;
+    const PanelEntry *eb = (const PanelEntry *)b;
+    int key  = s_sortctx ? s_sortctx->s_key  : SORT_NAME;
+    int desc = s_sortctx ? s_sortctx->s_desc : 0;
+    int r;
+
+    /* ".." always first; directories always before files - independent of key. */
+    if (ea->is_parent != eb->is_parent) return ea->is_parent ? -1 : 1;
+    if (ea->is_dir    != eb->is_dir)    return ea->is_dir    ? -1 : 1;
+
+    switch (key) {
+    case SORT_EXT:
+        r = stricmp(name_ext(ea->name), name_ext(eb->name));
+        break;
+    case SORT_SIZE:
+        r = (ea->size < eb->size) ? -1 : (ea->size > eb->size) ? 1 : 0;
+        break;
+    case SORT_DATE:
+        r = cmp_u(ea->date, eb->date);
+        if (r == 0) r = cmp_u(ea->time, eb->time);
+        break;
+    case SORT_TIME:
+        r = cmp_u(ea->time, eb->time);
+        if (r == 0) r = cmp_u(ea->date, eb->date);
+        break;
+    case SORT_NAME:
+    default:
+        r = stricmp(ea->name, eb->name);
+        break;
+    }
+
+    if (desc) r = -r;
+    if (r == 0) r = stricmp(ea->name, eb->name);   /* stable tiebreak by name */
+    return r;
+}
+
+void Panel::sort_entries()
+{
+    s_sortctx = this;
+    qsort(entries, count, sizeof(PanelEntry), sort_compare);
+}
+
+void Panel::set_sort(int key, int desc)
+{
+    s_key  = (unsigned char)key;
+    s_desc = (unsigned char)(desc ? 1 : 0);
+}
+
+void Panel::resort()
+{
+    sort_entries();
+    if (cursor >= count) cursor = count ? count - 1 : 0;
+    clamp_scroll();
 }
 
 void Panel::set_region(int top_, int left_, int height_, int width_)
@@ -326,17 +422,22 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
     }
 
     /* Date+time (right-aligned). Left empty for the ".." entry.
-     * EN: "MM-DD-YY HH:MM"  /  DE: "DD-MM-YY HH:MM"  (both 14 characters) */
+     * Field order and separators follow the locale (2-digit year, 14 chars):
+     * MDY "MM/DD/YY HH:MM" / DMY "DD-MM-YY HH:MM" / YMD "YY-MM-DD HH:MM". */
     if (!e->is_parent) {
-        int year  = (int)((1980 + (int)((e->date >> 9) & 0x7F)) % 100);
-        int month = (int)((e->date >> 5) & 0x0F);
-        int day   = (int)(e->date & 0x1F);
-        int hh    = (int)((e->time >> 11) & 0x1F);
-        int mm    = (int)((e->time >> 5)  & 0x3F);
-        if (g_english)
-            sprintf(tmp, "%02d-%02d-%02d %02d:%02d", month, day, year, hh, mm);
-        else
-            sprintf(tmp, "%02d-%02d-%02d %02d:%02d", day, month, year, hh, mm);
+        int  year  = (int)((1980 + (int)((e->date >> 9) & 0x7F)) % 100);
+        int  month = (int)((e->date >> 5) & 0x0F);
+        int  day   = (int)(e->date & 0x1F);
+        int  hh    = (int)((e->time >> 11) & 0x1F);
+        int  mm    = (int)((e->time >> 5)  & 0x3F);
+        char ds    = g_locale.date_sep;
+        char ts    = g_locale.time_sep;
+        if (g_locale.date_order == 1)            /* DMY */
+            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", day, ds, month, ds, year, hh, ts, mm);
+        else if (g_locale.date_order == 2)       /* YMD */
+            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", year, ds, month, ds, day, hh, ts, mm);
+        else                                     /* MDY */
+            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", month, ds, day, ds, year, hh, ts, mm);
         place(out, c.date_off, tmp, c.date_w, 1);
     }
 }

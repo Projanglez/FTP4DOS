@@ -74,6 +74,15 @@ public:
     int         selected_index() const { return cursor; }
     int         entry_count()    const { return count; }
 
+    /* --- Sorting (configurable, per panel) --- */
+    /* Sort keys for set_sort(). ".." stays first and directories stay grouped
+     * before files regardless of key/direction; the key orders within a group. */
+    enum { SORT_NAME = 0, SORT_EXT, SORT_SIZE, SORT_DATE, SORT_TIME };
+    void set_sort(int key, int desc);   /* set the mode (does NOT re-sort)      */
+    int  sort_key()  const { return s_key;  }
+    int  sort_desc() const { return s_desc; }
+    void resort();                      /* re-sort the current entries in place  */
+
     /* Set the cursor to the entry with this name (case-insensitive). If it
      * is not found, the cursor stays within the valid range. Used to "keep
      * the cursor on the item after the operation". */
@@ -121,17 +130,29 @@ protected:
     int        active;      /* 1 = active panel                     */
     char       header[PANEL_HEADER_MAX];  /* path/title line        */
 
+    /* --- Sort mode (per panel) --- */
+    unsigned char s_key;    /* current sort key (SORT_*)            */
+    unsigned char s_desc;   /* 1 = descending                       */
+
     /* --- Helper functions --- */
     int  visible_rows() const;   /* number of visible entry rows           */
     void clamp_scroll();         /* adjust topentry so the cursor is visible */
     void draw_entry_row(int idx);/* redraw just one entry row (idx)        */
     void format_entry(const PanelEntry *e, char *out, int inner) const;
+    /* Sort entries[] by the current mode (subclasses call this in refresh()). */
+    void sort_entries();
     virtual unsigned char frame_attr() const;  /* border color (overridable) */
     /* Display case convention: 1 = Norton style (UPPERCASE directories,
      * lowercase files); 0 = show the name verbatim. The local panel keeps
      * the Norton convention; the FTP panel overrides this to 0 because Unix
      * servers are case-sensitive (see RemotePanel). */
     virtual int nc_case() const;
+
+private:
+    /* Configurable qsort comparator. Reads s_sortctx (set by sort_entries()
+     * just before qsort) since a C qsort callback gets no instance pointer. */
+    static const Panel *s_sortctx;
+    static int sort_compare(const void *a, const void *b);
 };
 
 #endif /* PANEL_H */

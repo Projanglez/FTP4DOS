@@ -44,13 +44,16 @@ int dircopy_download(FtpClient *ftp, const char *remotePath, const char *localDi
                      DirCopyItemCb itemcb, FtpProgressCb progcb,
                      DirCopyConflictCb conflictcb, void *ctx);
 
-/* Tree count for the delete warning. Recursively counts ALL files and
- * directories below 'path' AND the root directory itself; the values
- * are ADDED to *nfiles / *ndirs (caller must pre-initialize to 0).
- * Returns FTP_OK or an FTP_ERR_* code. */
-int dircopy_count_local (const char *path, unsigned *nfiles, unsigned *ndirs);
-int dircopy_count_remote(FtpClient *ftp, const char *path,
-                         unsigned *nfiles, unsigned *ndirs);
+/* Tree measure: recursively counts files, subdirectories and total bytes below
+ * 'path'. The ROOT directory itself is NOT counted (the caller adds the
+ * top-level entry); every nested subdirectory IS counted in *ndirs. Files add
+ * to *nfiles and their sizes to *bytes. All values are ADDED to the outputs
+ * (caller must pre-initialize). Returns FTP_OK or an FTP_ERR_* code. Used both
+ * for the confirm-dialog totals and the batch progress bar/ETA. */
+int dircopy_measure_local (const char *path, unsigned *nfiles, unsigned *ndirs,
+                           unsigned long *bytes);
+int dircopy_measure_remote(FtpClient *ftp, const char *path,
+                           unsigned *nfiles, unsigned *ndirs, unsigned long *bytes);
 
 /* Recursive delete (including all subdirectories and 'path' itself). */
 int dircopy_delete_local (const char *path, DirCopyItemCb itemcb, void *ctx);

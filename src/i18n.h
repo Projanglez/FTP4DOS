@@ -12,7 +12,22 @@
 
 extern int g_english;          /* 0 = German, 1 = English */
 
-/* Determine the language from the DOS country setting (once at startup). */
+/* Regional number/date formatting, read from the DOS country block
+ * (INT 21h/38h) at startup. Used for every on-screen size, date and time so
+ * the display follows COUNTRY= in CONFIG.SYS (e.g. NL: "1.000.000", dd-mm-yy).
+ * Independent of g_english, which only selects the UI text language. */
+struct Locale {
+    char thousands_sep;        /* digit grouping char, e.g. ',' (US) / '.' (NL) */
+    char decimal_sep;          /* decimal point char,  e.g. '.' (US) / ',' (NL) */
+    char date_sep;             /* date field separator, e.g. '/' or '-'         */
+    char time_sep;             /* time field separator, usually ':'             */
+    int  date_order;           /* 0 = MDY, 1 = DMY, 2 = YMD                      */
+    int  time_24h;             /* 1 = 24-hour clock, 0 = 12-hour                 */
+};
+extern Locale g_locale;
+
+/* Determine the language and regional formatting from the DOS country
+ * setting (once at startup). */
 void i18n_init(void);
 
 /* Returns the English (en) or German (de) text depending on the detected
