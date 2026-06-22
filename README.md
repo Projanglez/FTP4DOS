@@ -13,14 +13,18 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 ## Features
 
 - Two panels: local (DOS) and remote (FTP, passive mode)
-- Copy in both directions (F5), including **recursive directory trees**
-- Multiple selection with the **Ins key** (Norton style) for copy/delete
+- Copy in both directions (F5), including **recursive directory trees**, with live transfer telemetry (current/average speed, per-file and batch ETA)
+- Pause (P) and cancel (ESC) during a running transfer
+- Multiple selection with the **Ins key** (Norton style) for copy/move/delete
 - Move (F6) and rename (Alt+F6); **recursive** move/copy/delete for whole directory trees
-- Create directories (F7), **recursive delete** with pre-count confirmation (F8)
+- Create directories (F7) and **recursive delete** (F8); Copy/Move/Delete confirm with recursive file/directory counts and total size
+- Configurable per-panel sorting (Alt+F3): by name, extension, size, date or time, ascending or descending
+- File checksums (Alt+F9): CRC32 + MD5 for local and remote files, optionally saved to a file
 - Swap the two panels left/right with Ctrl+U (remembered across launches)
 - Navigate directories; view files with F3 (or Enter) — up to 32 KB displayed
 - Remote view (F3) downloads to a temporary file first, then opens the viewer
 - Edit local text files with F4 — minimal full-screen editor (~32 KB, local only)
+- Compact size display for large files (M/G units); locale-aware number/date/time formatting from the DOS country setting
 - FTP connection keepalive: sends NOOP every 60 s to prevent server idle timeouts
 - Bilingual German/English UI (auto-detected from DOS country setting, or forced on the command line: `FTP4DOS /L:EN`)
 
@@ -111,12 +115,14 @@ encrypted — and FTP transmits passwords in plain text anyway.
 | F1 | Help |
 | F2 | FTP connect / disconnect |
 | F3 | View file (local or remote; max 32 KB) |
+| Alt+F3 | Sort the active panel (name/extension/size/date/time, asc/desc) |
 | F4 | Edit local file (minimal editor, ~32 KB, no undo/search) |
 | F5 | Copy (recursive for directories) |
 | F6 | Move (copy then delete source; recursive) |
 | Alt+F6 | Rename (in place) |
 | F7 | Create directory |
 | F8 | Delete (recursive with confirmation) |
+| Alt+F9 | Checksum (CRC32 + MD5) of the selected file, optionally saved to a file |
 | F9 / Alt+F1 | Switch local drive |
 | F10 | Quit |
 
