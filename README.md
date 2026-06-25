@@ -13,14 +13,12 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 ## Features
 
 - Two panels: local (DOS) and remote (FTP, passive mode)
-- Navigate directories; view files with F3 (or Enter) — up to 32 KB displayed
-- Remote view (F3) downloads to a temporary file first, then opens the viewer
+- Navigate directories; view files with F3 (or Enter) — up to 32 KB displayed (remote view downloads temp file first)
 - Edit local text files with F4 — minimal full-screen editor (~32 KB, local only)
-- Bilingual German/English UI (auto-detected from DOS country setting, or forced on the command line: `FTP4DOS /L:EN`)
 - Compact size display for large files (M/G units); locale-aware number/date/time formatting from the DOS country setting
 - Copy in both directions (F5), including **recursive directory trees**, with live transfer telemetry (current/average speed, per-file and batch ETA)
-- Pause (P) and cancel (ESC) during a running transfer
 - Move (F6) and rename (Alt+F6); **recursive** move/copy/delete for whole directory trees
+- Pause (P) and cancel (ESC) during a running transfer
 - Create directories (F7) and **recursive delete** (F8); Copy/Move/Delete confirm with recursive file/directory counts and total size
 - Multiple selection with the **Ins key** (Norton style) for copy/move/delete
 - Configurable per-panel sorting (Alt+F3): by name, extension, size, date or time, ascending or descending — remembered across launches
@@ -31,6 +29,7 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 - File checksums (Alt+F9): CRC32 + MD5 for local and remote files, optionally saved to a file
 - **Long remote file names** kept in full (beyond the 8.3 / 40-column display) and used for transfers; **Alt+F2 "Detail"** shows the complete name and size
 - **Large remote directories** — the default listing holds 512 entries (with a popup when there are more); start with **`/EXMEM`** to store the remote list in **extended (XMS) or expanded (EMS) memory** and browse directories with several thousand files
+- Bilingual German/English UI (auto-detected from DOS country setting, or forced on the command line: `FTP4DOS /L:EN`)
 
 ## Build requirements
 
