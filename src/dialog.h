@@ -10,7 +10,7 @@
 #ifndef DIALOG_H
 #define DIALOG_H
 
-#define DLG_MAX_LINES 12    /* max. text lines in message/confirm dialogs */
+#define DLG_MAX_LINES 14    /* max. text lines in message/confirm dialogs */
 
 /* Notice/error box with one [ OK ] button. is_error!=0 -> red styling.
  * Closes on Enter, Esc, or Space. */
@@ -80,6 +80,7 @@ int dlg_connect(const char *title,
                 char *port, int port_max,
                 char *user, int user_max,
                 char *pass, int pass_max,
+                char *startdir, int startdir_max,
                 int *save_conn,
                 int *save_pass);
 

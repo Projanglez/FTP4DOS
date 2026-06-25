@@ -95,7 +95,7 @@ static void deobfus_hex(const char *hex, char *dst, int dstsz)
 /* ------------------------------------------------------------------ */
 int connsave_load(char *host, int hostsz, char *port, int portsz,
                   char *user, int usersz, char *pass, int passsz,
-                  int *savepw, int *swap)
+                  int *savepw, int *swap, UiState *ui)
 {
     FILE *f;
     char  line[256];
@@ -123,6 +123,13 @@ int connsave_load(char *host, int hostsz, char *port, int portsz,
         else if (stricmp(key, "savepw") == 0) { if (savepw) *savepw = atoi(val) ? 1 : 0; }
         else if (stricmp(key, "swap") == 0) { if (swap) *swap = atoi(val) ? 1 : 0; }
         else if (stricmp(key, "pass") == 0) { if (val[0]) deobfus_hex(val, pass, passsz); }
+        else if (stricmp(key, "startdir")  == 0) { if (ui) { strncpy(ui->startdir, val, sizeof(ui->startdir) - 1); ui->startdir[sizeof(ui->startdir) - 1] = 0; } }
+        else if (stricmp(key, "lsortkey")  == 0) { if (ui) ui->lsort_key   = atoi(val); }
+        else if (stricmp(key, "lsortdesc") == 0) { if (ui) ui->lsort_desc  = atoi(val) ? 1 : 0; }
+        else if (stricmp(key, "lsortsaved")== 0) { if (ui) ui->lsort_saved = atoi(val) ? 1 : 0; }
+        else if (stricmp(key, "rsortkey")  == 0) { if (ui) ui->rsort_key   = atoi(val); }
+        else if (stricmp(key, "rsortdesc") == 0) { if (ui) ui->rsort_desc  = atoi(val) ? 1 : 0; }
+        else if (stricmp(key, "rsortsaved")== 0) { if (ui) ui->rsort_saved = atoi(val) ? 1 : 0; }
     }
 
     fclose(f);
@@ -133,7 +140,8 @@ int connsave_load(char *host, int hostsz, char *port, int portsz,
 /* Save                                                                 */
 /* ------------------------------------------------------------------ */
 void connsave_store(const char *host, const char *port,
-                    const char *user, const char *pass, int savepw, int swap)
+                    const char *user, const char *pass, int savepw, int swap,
+                    const UiState *ui)
 {
     FILE *f;
 
@@ -154,6 +162,16 @@ void connsave_store(const char *host, const char *port,
         fprintf(f, "pass=%s\n", hex);
     } else {
         fprintf(f, "pass=\n");
+    }
+
+    if (ui) {
+        fprintf(f, "startdir=%s\n", ui->startdir);
+        fprintf(f, "lsortkey=%d\n",   ui->lsort_key);
+        fprintf(f, "lsortdesc=%d\n",  ui->lsort_desc ? 1 : 0);
+        fprintf(f, "lsortsaved=%d\n", ui->lsort_saved ? 1 : 0);
+        fprintf(f, "rsortkey=%d\n",   ui->rsort_key);
+        fprintf(f, "rsortdesc=%d\n",  ui->rsort_desc ? 1 : 0);
+        fprintf(f, "rsortsaved=%d\n", ui->rsort_saved ? 1 : 0);
     }
 
     fclose(f);

@@ -14,6 +14,16 @@
 #ifndef CONNSAVE_H
 #define CONNSAVE_H
 
+/* Extra persisted UI state that travels with the saved connection: the FTP
+ * start directory (empty = root) and the per-pane sort mode. Each pane's
+ * *sort_saved flag tells whether a sort was explicitly remembered (0 = use
+ * the program default). Bundled so the save/load API stays compact. */
+struct UiState {
+    char startdir[80];
+    int  lsort_key, lsort_desc, lsort_saved;   /* left/local pane   */
+    int  rsort_key, rsort_desc, rsort_saved;   /* right/remote pane */
+};
+
 /* Set the storage path once: the EXE's directory (from argv[0]),
  * fallback to the current directory at startup (before any navigation). */
 void connsave_init(const char *argv0);
@@ -22,15 +32,18 @@ void connsave_init(const char *argv0);
  * file; missing ones are left unchanged (caller sets defaults).
  * *savepw receives the saved "remember password" setting (0/1).
  * *swap (may be null) receives the saved "panels swapped" UI setting (0/1).
+ * *ui  (may be null) receives the saved start dir + per-pane sort state.
  * Return value: 1 = file read, 0 = no file / not readable. */
 int  connsave_load(char *host, int hostsz, char *port, int portsz,
                    char *user, int usersz, char *pass, int passsz,
-                   int *savepw, int *swap);
+                   int *savepw, int *swap, UiState *ui);
 
 /* Save the connection. Host/port/user are always stored; the password
  * only if savepw != 0 (otherwise the pass line stays empty). swap stores
- * the "panels swapped" UI setting (0/1). */
+ * the "panels swapped" UI setting (0/1). ui (may be null) stores the start
+ * dir + per-pane sort state. */
 void connsave_store(const char *host, const char *port,
-                    const char *user, const char *pass, int savepw, int swap);
+                    const char *user, const char *pass, int savepw, int swap,
+                    const UiState *ui);
 
 #endif /* CONNSAVE_H */
