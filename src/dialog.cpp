@@ -738,21 +738,22 @@ int dlg_menu(const char *title, const char *const *items, int count, int initial
 /* -------------------------------------------------------------------------
  * FTP connect form: Host/Port/User/Pass + save checkboxes
  *
- * Layout (cols=50, rows=11):
+ * Layout (cols=50, rows=12):
  *  Row 0:  border with title
  *  Row 1:  host field
  *  Row 2:  port field
  *  Row 3:  user field
  *  Row 4:  pass field (masked)
- *  Row 5:  divider
- *  Row 6:  [X] Save connection data
- *  Row 7:  [ ] Save password (insecure)
- *  Row 8:  divider
- *  Row 9:  buttons [ Connect ]  [ Cancel ]
- *  Row 10: bottom border
+ *  Row 5:  dir field (FTP start directory, optional)
+ *  Row 6:  divider
+ *  Row 7:  [X] Save connection data
+ *  Row 8:  [ ] Save password (insecure)
+ *  Row 9:  divider
+ *  Row 10: buttons [ Connect ]  [ Cancel ]
+ *  Row 11: bottom border
  *
- * Focus order: Host(0) Port(1) User(2) Pass(3)
- *              chk_save(4) chk_pass(5) btn_ok(6) btn_cancel(7)
+ * Focus order: Host(0) Port(1) User(2) Pass(3) Dir(4)
+ *              chk_save(5) chk_pass(6) btn_ok(7) btn_cancel(8)
  * Tab/Down forward, Up backward. Space/Enter on a checkbox toggles it.
  * ---------------------------------------------------------------------- */
 int dlg_connect(const char *title,
@@ -760,41 +761,44 @@ int dlg_connect(const char *title,
                 char *port, int port_max,
                 char *user, int user_max,
                 char *pass, int pass_max,
+                char *startdir, int startdir_max,
                 int *save_conn,
                 int *save_pass)
 {
     int cols   = 50;
-    int rows   = 11;
+    int rows   = 12;
     int top    = (SCREEN_ROWS - rows) / 2;
     int left   = (SCREEN_COLS - cols) / 2;
     int inner  = cols - 4;          /* usable inner area                     */
     int fdw    = inner - 6;         /* field display width: inner - "Host: " */
     int fcol   = left + 2 + 6;      /* left edge of the input fields         */
-    int NFOCUS = 8;
-    int focus  = (host[0] != '\0') ? 6 : 0;  /* pre-filled: focus Connect directly */
+    int NFOCUS = 9;
+    int focus  = (host[0] != '\0') ? 7 : 0;  /* pre-filled: focus Connect directly */
 
     /* Text fields */
-    char *fbufs[4];
-    int   fmaxs[4];
-    EditField efs[4];
-    int   frows[4];
-    const char *flbls[4];
-    int   is_pw[4];
+    char *fbufs[5];
+    int   fmaxs[5];
+    EditField efs[5];
+    int   frows[5];
+    const char *flbls[5];
+    int   is_pw[5];
     int i;
 
-    fbufs[0] = host; fmaxs[0] = host_max; frows[0] = top + 1;
-    fbufs[1] = port; fmaxs[1] = port_max; frows[1] = top + 2;
-    fbufs[2] = user; fmaxs[2] = user_max; frows[2] = top + 3;
-    fbufs[3] = pass; fmaxs[3] = pass_max; frows[3] = top + 4;
+    fbufs[0] = host;     fmaxs[0] = host_max;     frows[0] = top + 1;
+    fbufs[1] = port;     fmaxs[1] = port_max;     frows[1] = top + 2;
+    fbufs[2] = user;     fmaxs[2] = user_max;     frows[2] = top + 3;
+    fbufs[3] = pass;     fmaxs[3] = pass_max;     frows[3] = top + 4;
+    fbufs[4] = startdir; fmaxs[4] = startdir_max; frows[4] = top + 5;
 
     flbls[0] = "Host: ";
     flbls[1] = "Port: ";
     flbls[2] = L("User: ", "User: ");
     flbls[3] = L("Pass: ", "Pass: ");
+    flbls[4] = L("Dir:  ", "Dir:  ");
 
-    is_pw[0] = 0; is_pw[1] = 0; is_pw[2] = 0; is_pw[3] = 1;
+    is_pw[0] = 0; is_pw[1] = 0; is_pw[2] = 0; is_pw[3] = 1; is_pw[4] = 0;
 
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 5; i++)
         editfield_init(&efs[i], fbufs[i], fmaxs[i]);
 
     /* Checkbox state (local; only written to *save_conn/*save_pass on OK) */
@@ -819,43 +823,46 @@ int dlg_connect(const char *title,
     draw_dialog_frame(top, left, rows, cols, title, bg);
 
     /* Static labels */
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 5; i++)
         draw_text(frows[i], left + 2, flbls[i], bg, 6);
 
     /* Divider lines */
-    draw_hsep(top + 5, left, cols, bg, 1);
-    draw_hsep(top + 8, left, cols, bg, 1);
-
-    show_cursor(1);
+    draw_hsep(top + 6, left, cols, bg, 1);
+    draw_hsep(top + 9, left, cols, bg, 1);
 
     for (;;) {
         int k;
         char tmp[56];
 
         /* Redraw the text fields */
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 5; i++) {
             int is_focused = (focus == i);
             unsigned char fa = is_focused ? ATTR_DIALOG_HL : bg;
             editfield_draw(&efs[i], frows[i], fcol, fdw, fa, is_pw[i], is_focused);
         }
 
+        /* Hardware cursor only belongs on an active text field; otherwise it
+         * would keep blinking behind the last edited field (e.g. when focus
+         * starts on the Connect button for a pre-filled host). */
+        show_cursor(focus >= 0 && focus <= 4);
+
         /* Checkboxes */
         {
-            unsigned char a4 = (focus == 4) ? ATTR_DIALOG_HL : bg;
             unsigned char a5 = (focus == 5) ? ATTR_DIALOG_HL : bg;
+            unsigned char a6 = (focus == 6) ? ATTR_DIALOG_HL : bg;
             sprintf(tmp, "[%c] %s", chk_save ? 'X' : ' ',
                     L("Save connection data", "Verbindungsdaten speichern"));
-            fill_rect(top + 6, left + 2, 1, inner, ' ', a4);
-            draw_text(top + 6, left + 2, tmp, a4, inner);
-            sprintf(tmp, "[%c] %s", chk_pass ? 'X' : ' ',
-                    L("Save password (insecure)", "Passwort speichern (unsicher)"));
             fill_rect(top + 7, left + 2, 1, inner, ' ', a5);
             draw_text(top + 7, left + 2, tmp, a5, inner);
+            sprintf(tmp, "[%c] %s", chk_pass ? 'X' : ' ',
+                    L("Save password (insecure)", "Passwort speichern (unsicher)"));
+            fill_rect(top + 8, left + 2, 1, inner, ' ', a6);
+            draw_text(top + 8, left + 2, tmp, a6, inner);
         }
 
         /* Buttons */
-        draw_button(top + 9, b0,               lbl_ok,     focus == 6);
-        draw_button(top + 9, b0 + bw_ok + gap, lbl_cancel, focus == 7);
+        draw_button(top + 10, b0,               lbl_ok,     focus == 7);
+        draw_button(top + 10, b0 + bw_ok + gap, lbl_cancel, focus == 8);
 
         k = readkey();
 
@@ -869,20 +876,20 @@ int dlg_connect(const char *title,
         { focus = (focus + NFOCUS - 1) % NFOCUS; continue; }
 
         /* Focus-specific input */
-        if (focus >= 0 && focus <= 3) {
+        if (focus >= 0 && focus <= 4) {
             if (k == KEY_ENTER) focus = (focus + 1) % NFOCUS;
             else                editfield_key(&efs[focus], k);
-        } else if (focus == 4) {
+        } else if (focus == 5) {
             if (k == KEY_ENTER || k == ' ') {
                 chk_save = !chk_save;
                 if (!chk_save) chk_pass = 0;
             }
-        } else if (focus == 5) {
+        } else if (focus == 6) {
             if ((k == KEY_ENTER || k == ' ') && chk_save)
                 chk_pass = !chk_pass;
-        } else if (focus == 6) {
+        } else if (focus == 7) {
             if (k == KEY_ENTER) { result = 1; break; }
-        } else { /* focus == 7 */
+        } else { /* focus == 8 */
             if (k == KEY_ENTER) { result = 0; break; }
         }
     }

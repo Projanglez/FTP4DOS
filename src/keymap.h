@@ -16,6 +16,8 @@
 #define KEY_TAB     0x09
 #define KEY_BACKSP  0x08
 #define KEY_SPACE   0x20
+#define KEY_CTRL_A  0x01  /* alias for Alt+F2 file detail                        */
+#define KEY_CTRL_R  0x12  /* alias for F9 refresh active panel                   */
 #define KEY_CTRL_U  0x15  /* swap panels left<->right (Norton Ctrl-U)            */
 
 /* ---- Extended keys (0x100 | scancode) ---- */

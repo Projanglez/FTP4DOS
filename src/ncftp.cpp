@@ -74,6 +74,15 @@ static int  g_nosplash    = 0;   /* /Q: skip splash screen                     *
 static int  g_swapped     = 0;   /* Ctrl-U: local panel on the right (saved)   */
 static int  g_video_pref  = -1;  /* -1 auto, 0 force color, 1 force mono        */
 
+/* Persisted UI state: FTP start directory + per-pane sort mode (FTP4DOS.SAV).
+ * Zero-initialized: empty start dir, both panes use the default sort until the
+ * user picks one. */
+static UiState g_ui = { "", 0, 0, 0, 0, 0, 0 };
+
+/* Set by perform_connect() when the optional start directory could not be
+ * entered; the caller shows the note AFTER its post-connect redraw_all(). */
+static int  g_startdir_warn = 0;
+
 /* Critical-error handler (INT 24h): prevents the DOS "Abort, Retry, Fail?"
  * prompt - e.g. for an empty floppy drive. Instead of letting it wreck the
  * screen, we simply let the failed DOS operation return with an error
@@ -317,7 +326,7 @@ static void do_swap_panels(void)
     apply_panel_regions();
     redraw_all();
     if (g_saveconn)
-        connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped);
+        connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped, &g_ui);
 }
 
 /* Called when the FTP connection was lost while idle. */
@@ -374,10 +383,17 @@ static int perform_connect(void)
     }
     if (rc != FTP_OK) return rc;
 
+    /* Optional start directory: CWD into it before listing. A bad/missing dir
+     * is non-fatal - keep the connection at root and note it in the status
+     * (the caller flashes it after its post-connect redraw). */
+    g_startdir_warn = 0;
+    if (g_ui.startdir[0] && g_ftp.change_dir(g_ui.startdir) != FTP_OK)
+        g_startdir_warn = 1;
+
     g_right.refresh();
     set_active((Panel *)&g_right);
     if (g_saveconn)
-        connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped);
+        connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped, &g_ui);
     return FTP_OK;
 }
 
@@ -410,6 +426,7 @@ static void do_connect(void)
                      g_portStr, (int)sizeof(g_portStr) - 1,
                      g_user,    (int)sizeof(g_user) - 1,
                      g_pass,    (int)sizeof(g_pass) - 1,
+                     g_ui.startdir, (int)sizeof(g_ui.startdir) - 1,
                      &g_saveconn, &g_savepw))
     { redraw_all(); return; }
     if (g_host[0] == '\0') { redraw_all(); return; }
@@ -421,6 +438,9 @@ static void do_connect(void)
         return;
     }
     redraw_all();
+    if (g_startdir_warn)
+        flash_status(L(" Start dir not found - connected at root.",
+                       " Startverzeichnis nicht gefunden - Wurzel."));
 }
 
 /* -------------------------------------------------------------------------
@@ -1459,42 +1479,65 @@ static void do_rename(void)
 
 /* -------------------------------------------------------------------------
  * Alt+F3 - Sort the active panel (configurable key + direction)
- * One combined menu: 5 keys x ascending/descending. Each panel keeps its own
- * mode (Panel::set_sort), so left and right can be sorted differently.
+ * One combined menu: 5 keys x ascending/descending, plus a "Default" entry.
+ * Each panel keeps its own mode (Panel::set_sort), so left and right can be
+ * sorted differently; the choice is remembered per pane in FTP4DOS.SAV and
+ * "Default" forgets it again.
  * ---------------------------------------------------------------------- */
 static void do_sort(void)
 {
-    static const char *en[10] = {
+    static const char *en[11] = {
         "Name (A-Z)",       "Name (Z-A)",
         "Extension (A-Z)",  "Extension (Z-A)",
         "Size (small-big)", "Size (big-small)",
         "Date (old-new)",   "Date (new-old)",
-        "Time (early-late)","Time (late-early)"
+        "Time (early-late)","Time (late-early)",
+        "Default"
     };
-    static const char *de[10] = {
+    static const char *de[11] = {
         "Name (A-Z)",          "Name (Z-A)",
         "Endung (A-Z)",        "Endung (Z-A)",
         "Gr" oe ss "e (klein)","Gr" oe ss "e (gro" ss ")",
         "Datum (alt)",         "Datum (neu)",
-        "Zeit (fr" ue "h)",    "Zeit (sp" ae "t)"
+        "Zeit (fr" ue "h)",    "Zeit (sp" ae "t)",
+        "Standard"
     };
-    const char *items[10];
+    const char *items[11];
     char keep[PANEL_NAME_MAX];
     PanelEntry *e;
-    int i, init, r;
+    int i, init, r, isleft;
 
     if (g_active == 0) return;
-    for (i = 0; i < 10; i++) items[i] = g_english ? en[i] : de[i];
+    for (i = 0; i < 11; i++) items[i] = g_english ? en[i] : de[i];
 
     init = g_active->sort_key() * 2 + g_active->sort_desc();
-    r = dlg_menu(L("Sort", "Sortieren"), items, 10, init);
+    r = dlg_menu(L("Sort", "Sortieren"), items, 11, init);
     if (r >= 0) {
         e = g_active->selected();
         if (e) { strncpy(keep, e->name, sizeof(keep) - 1); keep[sizeof(keep) - 1] = '\0'; }
         else   { keep[0] = '\0'; }
-        g_active->set_sort(r / 2, r & 1);
+
+        /* r 0..9 = key*2+dir; r == 10 = "Default" (Name ascending, forget the
+         * saved choice for this pane). */
+        if (r == 10) g_active->set_sort(Panel::SORT_NAME, 0);
+        else         g_active->set_sort(r / 2, r & 1);
         g_active->resort();
         if (keep[0]) g_active->select_by_name(keep);
+
+        /* Remember (or clear) the choice for THIS pane, keyed by object
+         * identity so it is stable regardless of g_swapped. */
+        isleft = (g_active == (Panel *)&g_left);
+        if (isleft) {
+            g_ui.lsort_key   = g_active->sort_key();
+            g_ui.lsort_desc  = g_active->sort_desc();
+            g_ui.lsort_saved = (r == 10) ? 0 : 1;
+        } else {
+            g_ui.rsort_key   = g_active->sort_key();
+            g_ui.rsort_desc  = g_active->sort_desc();
+            g_ui.rsort_saved = (r == 10) ? 0 : 1;
+        }
+        if (g_saveconn)
+            connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped, &g_ui);
     }
     redraw_all();
 }
@@ -1567,13 +1610,14 @@ static void print_usage(void)
 {
     printf("FTP4DOS v" APP_VERSION " - Dual-Panel FTP Client for DOS\n");
     printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ftp4dos\n\n");
-    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/S:ALL|NOPASS|OFF] [/Q] [/MONO|/COLOR]\n");
+    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/Q] [/MONO|/COLOR]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
     printf("  /H:HOST         connect to HOST automatically on startup\n");
     printf("  /P:PORT         port (default 21)\n");
     printf("  /U:USER         user name (default anonymous)\n");
     printf("  /W:PASS         password  (WARNING: stored in cleartext in the batch file)\n");
+    printf("  /D:DIR          FTP start directory after connect (empty = root)\n");
     printf("  /S:ALL          save connection incl. password to FTP4DOS.SAV (default)\n");
     printf("  /S:NOPASS       save connection but not the password\n");
     printf("  /S:OFF          do not save this connection\n");
@@ -1599,7 +1643,7 @@ int main(int argc, char *argv[])
     connsave_init(argv[0]);
     connsave_load(g_host, (int)sizeof(g_host), g_portStr, (int)sizeof(g_portStr),
                   g_user, (int)sizeof(g_user), g_pass, (int)sizeof(g_pass),
-                  &g_savepw, &g_swapped);
+                  &g_savepw, &g_swapped, &g_ui);
 
     /* Parse the command line (overrides the loaded values). Uniform syntax
      * /X or /X:value; '-' is also allowed instead of '/'. The flag letter
@@ -1636,6 +1680,10 @@ int main(int argc, char *argv[])
                 break;
             case 'w':
                 strncpy(g_pass, val, sizeof(g_pass) - 1); g_pass[sizeof(g_pass) - 1] = 0;
+                break;
+            case 'd':       /* /D:DIR : FTP start directory (empty = root) */
+                strncpy(g_ui.startdir, val, sizeof(g_ui.startdir) - 1);
+                g_ui.startdir[sizeof(g_ui.startdir) - 1] = 0;
                 break;
             case 's':
                 if      (stricmp(val, "OFF")    == 0) g_saveconn = 0;
@@ -1675,6 +1723,10 @@ int main(int argc, char *argv[])
     tui_init(g_video_pref);
 
     apply_panel_regions();          /* honors g_swapped loaded from FTP4DOS.SAV */
+    /* Apply the remembered per-pane sort (if any) before the first refresh;
+     * set_sort only sets the mode, the refresh() below sorts via sort_entries(). */
+    if (g_ui.lsort_saved) g_left.set_sort(g_ui.lsort_key, g_ui.lsort_desc);
+    if (g_ui.rsort_saved) g_right.set_sort(g_ui.rsort_key, g_ui.rsort_desc);
     g_left.refresh();
     g_right.refresh();
     set_active((Panel *)&g_left);
@@ -1694,6 +1746,9 @@ int main(int argc, char *argv[])
             if (perform_connect() != FTP_OK)
                 dlg_error(L("Connection failed", "Verbindung fehlgeschlagen"), g_ftp.last_error());
             redraw_all();
+            if (g_startdir_warn)
+                flash_status(L(" Start dir not found - connected at root.",
+                               " Startverzeichnis nicht gefunden - Wurzel."));
         } else {
             flash_status(L(" FTP unavailable (MTCPCFG?).",
                            " FTP nicht verf" ue "gbar (MTCPCFG?)."));
@@ -1750,6 +1805,9 @@ int main(int argc, char *argv[])
             do_swap_panels();
             break;
 
+        case KEY_CTRL_A: do_detail();  break;  /* alias for Alt+F2 */
+        case KEY_CTRL_R: do_refresh(); break;  /* alias for F9     */
+
         case KEY_UP:   g_active->move_step(-1); draw_statusbar(); break;
         case KEY_DOWN: g_active->move_step(+1); draw_statusbar(); break;
         case KEY_PGUP: g_active->page_up();   g_active->draw(); draw_statusbar(); break;
@@ -1800,6 +1858,8 @@ int main(int argc, char *argv[])
                 L("\n"
                   "Tab        Switch active panel\n"
                   "Ctrl+U     Swap left/right panels\n"
+                  "Ctrl+A     File details (= Alt+F2)\n"
+                  "Ctrl+R     Refresh active panel (= F9)\n"
                   "Insert     Mark item (copy/move/delete several)\n"
                   "*          Invert selection\n"
                   "+          Mark files missing or different in other panel\n"
@@ -1811,6 +1871,8 @@ int main(int argc, char *argv[])
                   "\n"
                   "Tab        Aktives Panel wechseln\n"
                   "Strg+U     Panels tauschen\n"
+                  "Strg+A     Dateidetails (= Alt+F2)\n"
+                  "Strg+R     Aktives Panel aktualisieren (= F9)\n"
                   "Einfg      Eintrag markieren (mehrere kop./versch./l" oe "schen)\n"
                   "*          Markierung invertieren\n"
                   "+          Fehlende/abweichende Dateien gg. anderem Panel markieren\n"
