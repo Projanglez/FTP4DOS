@@ -1,14 +1,20 @@
 /* =============================================================================
  * keymap.h - Key codes, readkey(), and the action enum for NCFTP386
  * -----------------------------------------------------------------------------
- * DOS keyboard via getch(): normal keys return their ASCII code, extended
- * keys (arrows, function keys) return 0 first, then the scan code. readkey()
- * combines that into a 9-bit code: extended keys => 0x100 | scancode.
+ * DOS keyboard via the BIOS (INT 16h): normal keys return their ASCII code,
+ * extended keys (arrows, function keys) return ASCII 0 plus a scan code.
+ * readkey() combines that into a 9-bit code: extended keys => 0x100 | scancode.
+ *
+ * The BIOS is used instead of getch() on purpose: getch() goes through DOS
+ * (INT 21h/AH=08h) which performs Ctrl-C break checking - that echoes "^C" and
+ * fires INT 23h, so Ctrl+C (0x03) would never reach us. The BIOS read has no
+ * such break handling, so Ctrl+C arrives as a plain 0x03.
  * ===========================================================================*/
 #ifndef KEYMAP_H
 #define KEYMAP_H
 
 #include <conio.h>
+#include <bios.h>
 
 /* ---- Normal keys (ASCII) ---- */
 #define KEY_ENTER   0x0D
@@ -16,6 +22,7 @@
 #define KEY_TAB     0x09
 #define KEY_BACKSP  0x08
 #define KEY_SPACE   0x20
+#define KEY_CTRL_C  0x03  /* alias for numpad + : compare/mark vs. other panel   */
 #define KEY_CTRL_A  0x01  /* alias for Alt+F2 file detail                        */
 #define KEY_CTRL_F  0x06  /* alias for Alt+F7 search / jump-to-name              */
 #define KEY_CTRL_R  0x12  /* alias for F9 refresh active panel                   */
@@ -58,19 +65,21 @@
 #define KEY_STAR    0x2A  /* invert marks                                          */
 #define KEY_PLUS    0x2B  /* mark files missing/differing vs. the other panel      */
 
-/* Read one key (blocking). Extended keys => 0x100 | scancode. */
+/* Read one key (blocking) via the BIOS. ASCII byte in the low half, scan code
+ * in the high half; ASCII 0 means an extended key => 0x100 | scancode. */
 inline int readkey(void)
 {
-    int k = getch();
-    if (k == 0)
-        k = 0x100 | getch();
-    return k;
+    unsigned ax = _bios_keybrd(_KEYBRD_READ);
+    int ascii = (int)(ax & 0xFF);
+    if (ascii == 0)
+        return 0x100 | (int)((ax >> 8) & 0xFF);
+    return ascii;
 }
 
 /* Is a key available? (non-blocking, for the idle loop). */
 inline int key_pending(void)
 {
-    return kbhit();
+    return _bios_keybrd(_KEYBRD_READY) != 0;
 }
 
 #endif /* KEYMAP_H */

@@ -44,13 +44,9 @@ static int cmp_entries(const PanelEntry *ea, const PanelEntry *eb, int key, int 
     case Panel::SORT_SIZE:
         r = (ea->size < eb->size) ? -1 : (ea->size > eb->size) ? 1 : 0;
         break;
-    case Panel::SORT_DATE:
+    case Panel::SORT_DATE:                         /* full timestamp: date major */
         r = cmp_u(ea->date, eb->date);
         if (r == 0) r = cmp_u(ea->time, eb->time);
-        break;
-    case Panel::SORT_TIME:
-        r = cmp_u(ea->time, eb->time);
-        if (r == 0) r = cmp_u(ea->date, eb->date);
         break;
     case Panel::SORT_NAME:
     default:
@@ -182,17 +178,11 @@ static void build_key(const PanelEntry *e, int key, ExtKey *k)
         k->pay[2] = (unsigned char)(e->size >> 8);
         k->pay[3] = (unsigned char)(e->size);
         break;
-    case Panel::SORT_DATE:
+    case Panel::SORT_DATE:                  /* full timestamp: date hi -> time lo */
         k->pay[0] = (unsigned char)(e->date >> 8);
         k->pay[1] = (unsigned char)(e->date);
         k->pay[2] = (unsigned char)(e->time >> 8);
         k->pay[3] = (unsigned char)(e->time);
-        break;
-    case Panel::SORT_TIME:
-        k->pay[0] = (unsigned char)(e->time >> 8);
-        k->pay[1] = (unsigned char)(e->time);
-        k->pay[2] = (unsigned char)(e->date >> 8);
-        k->pay[3] = (unsigned char)(e->date);
         break;
     case Panel::SORT_EXT: {
         const char *x = name_ext(e->name);

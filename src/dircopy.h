@@ -55,6 +55,14 @@ int dircopy_measure_local (const char *path, unsigned *nfiles, unsigned *ndirs,
 int dircopy_measure_remote(FtpClient *ftp, const char *path,
                            unsigned *nfiles, unsigned *ndirs, unsigned long *bytes);
 
+/* Produce a valid, unique DOS 8.3 local name for a (possibly long or
+ * multi-dot) remote name 'name' inside 'localDir'. Clean 8.3 names are kept
+ * verbatim; everything else is mangled to a unique VFAT-style "PREFIX~N.EXT".
+ * Used for single-file downloads so names like "apack-1.00.zip" map to a
+ * legal FAT name (e.g. "APACK-1~1.ZIP") instead of failing fopen(). */
+void dircopy_local_83(const char *name, const char *localDir,
+                      char *out, int outsz);
+
 /* Recursive delete (including all subdirectories and 'path' itself). */
 int dircopy_delete_local (const char *path, DirCopyItemCb itemcb, void *ctx);
 int dircopy_delete_remote(FtpClient *ftp, const char *path,

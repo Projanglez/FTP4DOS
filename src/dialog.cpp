@@ -1258,7 +1258,7 @@ void dlg_splash(const char *version)
     t0 = clock();
     while (!key_pending() && (clock() - t0) < (clock_t)(CLOCKS_PER_SEC * 10))
         ;
-    if (key_pending()) getch();
+    if (key_pending()) readkey();   /* consume via BIOS (no DOS Ctrl-C echo) */
 
     restore_screen(dlg_screen);
 }
