@@ -98,7 +98,9 @@ public:
     /* --- Sorting (configurable, per panel) --- */
     /* Sort keys for set_sort(). ".." stays first and directories stay grouped
      * before files regardless of key/direction; the key orders within a group. */
-    enum { SORT_NAME = 0, SORT_EXT, SORT_SIZE, SORT_DATE, SORT_TIME };
+    /* SORT_DATE sorts by the full timestamp (date major, time minor); there is
+     * no separate time-of-day key (date+time are one entity). */
+    enum { SORT_NAME = 0, SORT_EXT, SORT_SIZE, SORT_DATE };
     void set_sort(int key, int desc);   /* set the mode (does NOT re-sort)      */
     int  sort_key()  const { return s_key;  }
     int  sort_desc() const { return s_desc; }

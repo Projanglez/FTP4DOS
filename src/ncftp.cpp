@@ -39,7 +39,7 @@
 #include "i18n.h"
 #include "umlaut.h"   /* always include last */
 
-#define APP_VERSION "0.9.5"
+#define APP_VERSION "0.9.5a"
 
 /* ---- Screen layout ---- */
 #define PANEL_TOP     0
@@ -697,7 +697,11 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
 
     if (!to_remote) {
         /* --- Download: remote -> local --- */
-        join_local(target, (int)sizeof(target), g_left.path(), e->name);
+        /* Map the (possibly long / multi-dot) remote name to a legal DOS 8.3
+         * name so the default target is a valid FAT path the user can edit. */
+        char shortn[PANEL_NAME_MAX];
+        dircopy_local_83(entry_name(e), g_left.path(), shortn, (int)sizeof(shortn));
+        join_local(target, (int)sizeof(target), g_left.path(), shortn);
         sprintf(prompt, L("Download \"%.20s\" to:", "\"%.20s\" laden nach:"), e->name);
         if (!dlg_input(L("Download", "Download"), prompt, target, (int)sizeof(target) - 1, 0)) { redraw_all(); return; }
         if (target[0] == '\0') { redraw_all(); return; }
@@ -777,6 +781,13 @@ static int copy_one_entry(int to_remote, PanelEntry *e, CopyCtx *cc)
         if (e->is_dir)
             return dircopy_download(&g_ftp, entry_name(e), localpath,
                                     copy_item, copy_progress, copy_conflict, cc);
+        /* Single file: map the remote name to a legal DOS 8.3 target so
+         * multi-dot / long names (e.g. "apack-1.00.zip") don't fail fopen(). */
+        {
+            char shortn[PANEL_NAME_MAX];
+            dircopy_local_83(entry_name(e), g_left.path(), shortn, (int)sizeof(shortn));
+            join_local(localpath, (int)sizeof(localpath), g_left.path(), shortn);
+        }
         /* Single file: does it already exist locally? */
         if (local_exists(localpath)) {
             int d = copy_conflict(cc, e->name);
@@ -1560,41 +1571,39 @@ static void do_rename(void)
  * ---------------------------------------------------------------------- */
 static void do_sort(void)
 {
-    static const char *en[11] = {
-        "Name (A-Z)",       "Name (Z-A)",
-        "Extension (A-Z)",  "Extension (Z-A)",
-        "Size (small-big)", "Size (big-small)",
-        "Date (old-new)",   "Date (new-old)",
-        "Time (early-late)","Time (late-early)",
+    static const char *en[9] = {
+        "Name (A-Z)",        "Name (Z-A)",
+        "Extension (A-Z)",   "Extension (Z-A)",
+        "Size (small-big)",  "Size (big-small)",
+        "Date/Time (old-new)","Date/Time (new-old)",
         "Default"
     };
-    static const char *de[11] = {
+    static const char *de[9] = {
         "Name (A-Z)",          "Name (Z-A)",
         "Endung (A-Z)",        "Endung (Z-A)",
         "Gr" oe ss "e (klein)","Gr" oe ss "e (gro" ss ")",
-        "Datum (alt)",         "Datum (neu)",
-        "Zeit (fr" ue "h)",    "Zeit (sp" ae "t)",
+        "Datum/Zeit (alt)",    "Datum/Zeit (neu)",
         "Standard"
     };
-    const char *items[11];
+    const char *items[9];
     char keep[PANEL_NAME_MAX];
     PanelEntry *e;
     int i, init, r, isleft;
 
     if (g_active == 0) return;
-    for (i = 0; i < 11; i++) items[i] = g_english ? en[i] : de[i];
+    for (i = 0; i < 9; i++) items[i] = g_english ? en[i] : de[i];
 
     init = g_active->sort_key() * 2 + g_active->sort_desc();
-    r = dlg_menu(L("Sort", "Sortieren"), items, 11, init);
+    r = dlg_menu(L("Sort", "Sortieren"), items, 9, init);
     if (r >= 0) {
         e = g_active->selected();
         if (e) { strncpy(keep, e->name, sizeof(keep) - 1); keep[sizeof(keep) - 1] = '\0'; }
         else   { keep[0] = '\0'; }
 
-        /* r 0..9 = key*2+dir; r == 10 = "Default" (Name ascending, forget the
+        /* r 0..7 = key*2+dir; r == 8 = "Default" (Name ascending, forget the
          * saved choice for this pane). */
-        if (r == 10) g_active->set_sort(Panel::SORT_NAME, 0);
-        else         g_active->set_sort(r / 2, r & 1);
+        if (r == 8) g_active->set_sort(Panel::SORT_NAME, 0);
+        else        g_active->set_sort(r / 2, r & 1);
         g_active->resort();
         if (keep[0]) g_active->select_by_name(keep);
 
@@ -1604,11 +1613,11 @@ static void do_sort(void)
         if (isleft) {
             g_ui.lsort_key   = g_active->sort_key();
             g_ui.lsort_desc  = g_active->sort_desc();
-            g_ui.lsort_saved = (r == 10) ? 0 : 1;
+            g_ui.lsort_saved = (r == 8) ? 0 : 1;
         } else {
             g_ui.rsort_key   = g_active->sort_key();
             g_ui.rsort_desc  = g_active->sort_desc();
-            g_ui.rsort_saved = (r == 10) ? 0 : 1;
+            g_ui.rsort_saved = (r == 8) ? 0 : 1;
         }
         if (g_saveconn)
             connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped, &g_ui);
@@ -1935,6 +1944,7 @@ int main(int argc, char *argv[])
             g_active->toggle_mark(); draw_statusbar(); break;
         case KEY_STAR: /* numpad *: invert all marks (NC style) */
             g_active->invert_marks(); draw_statusbar(); break;
+        case KEY_CTRL_C: /* alias for numpad + */
         case KEY_PLUS: { /* numpad +: mark missing/different files */
             const Panel *other = (g_active == (Panel *)&g_left)
                                  ? (const Panel *)&g_right
@@ -1981,7 +1991,7 @@ int main(int argc, char *argv[])
                   "Ctrl+R     Refresh active panel (= F9)\n"
                   "Insert     Mark item (copy/move/delete several)\n"
                   "*          Invert selection\n"
-                  "+          Mark files missing or different in other panel\n"
+                  "+          Compare panels (= Ctrl+C)\n"
                   "Enter      Enter directory / view file\n"
                   "Backspace  Parent directory\n"
                   "Arrows/PgUp/PgDn/Home/End  Navigate\n"
@@ -1995,7 +2005,7 @@ int main(int argc, char *argv[])
                   "Strg+R     Aktives Panel aktualisieren (= F9)\n"
                   "Einfg      Eintrag markieren (mehrere kop./versch./l" oe "schen)\n"
                   "*          Markierung invertieren\n"
-                  "+          Fehlende/abweichende Dateien gg. anderem Panel markieren\n"
+                  "+          Fenster vergleichen (= Strg+C)\n"
                   "Enter      Verzeichnis betreten / Datei anzeigen\n"
                   "Backspace  " Ue "bergeordnetes Verzeichnis\n"
                   "Pfeile, Bild-auf/ab, Pos1, Ende  Navigieren\n"

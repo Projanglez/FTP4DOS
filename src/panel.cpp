@@ -122,6 +122,9 @@ void Panel::sort_entries()
 
 void Panel::set_sort(int key, int desc)
 {
+    /* Guard against out-of-range keys (e.g. the retired SORT_TIME=4 in an older
+     * FTP4DOS.SAV): fall back to name order. */
+    if (key < SORT_NAME || key > SORT_DATE) key = SORT_NAME;
     s_key  = (unsigned char)key;
     s_desc = (unsigned char)(desc ? 1 : 0);
 }

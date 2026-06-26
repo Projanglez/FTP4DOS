@@ -332,6 +332,14 @@ static void make_local_83(const char *name, const char *localDir, char *out, int
     out[outsz - 1] = '\0';
 }
 
+/* Public wrapper (see dircopy.h): same 8.3 mangling used by single-file
+ * downloads so multi-dot / long remote names get a legal FAT target name. */
+void dircopy_local_83(const char *name, const char *localDir,
+                      char *out, int outsz)
+{
+    make_local_83(name, localDir, out, outsz);
+}
+
 static int download_recurse(FtpClient *ftp, const char *remoteDir,
                             const char *localDir, const char *leaf, int depth,
                             DirCopyItemCb itemcb, FtpProgressCb progcb,
