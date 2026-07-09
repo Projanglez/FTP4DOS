@@ -33,3 +33,19 @@ src/*.obj
 .claude/
 .vscode/
 CLAUDE.md
+
+# QEMU-Test-VMs: grosse Images/Artefakte nicht einchecken.
+# Skripte (vmctl.py, ftpserver.py, run.ps1) werden separat erlaubt.
+vm/hdd.img
+vm/share/
+vm/shots/
+vm/drivers/
+vm/ftproot/
+vm71/hdd.img
+vm71/shots/
+vm71/share/FTP4DOS.EXE
+vm71/share/FTP4DOS.SAV
+vm71/share/NET/NE2000.COM
+vm71/share/a */
+vm71/share/another */
+vm71/share/this */

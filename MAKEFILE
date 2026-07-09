@@ -53,6 +53,7 @@ APP_OBJS = &
     src\tui.obj &
     src\panel.obj &
     src\lpanel.obj &
+    src\lfn.obj &
     src\rpanel.obj &
     src\ftpcli.obj &
     src\dialog.obj &
@@ -108,7 +109,7 @@ $(TARGET): $(ALL_OBJS)
 # -----------------------------------------------------------------------------
 # -zt256: put the large panel globals (g_left/g_right, ~25 KB each) into
 # FAR data segments so DGROUP (64 KB, large model) doesn't overflow.
-src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\entrystore.h src\extmem.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h src\viewer.h src\editor.h src\dircopy.h src\connsave.h src\sites.h src\checksum.h src\i18n.h src\umlaut.h
+src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\entrystore.h src\extmem.h src\lpanel.h src\rpanel.h src\ftpcli.h src\keymap.h src\dialog.h src\viewer.h src\editor.h src\dircopy.h src\connsave.h src\sites.h src\checksum.h src\i18n.h src\lfn.h src\umlaut.h
     $(CPP) $(CFLAGS) -zt256 $(INCPATH) -fo=$@ $[@
 
 src\tui.obj: src\tui.cpp src\tui.h
@@ -117,7 +118,10 @@ src\tui.obj: src\tui.cpp src\tui.h
 src\panel.obj: src\panel.cpp src\panel.h src\entrystore.h src\tui.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\tui.h
+src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\tui.h src\lfn.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\lfn.obj: src\lfn.cpp src\lfn.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h src\i18n.h

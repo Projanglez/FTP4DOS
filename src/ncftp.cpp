@@ -37,6 +37,7 @@
 #include "sites.h"
 #include "checksum.h"
 #include "i18n.h"
+#include "lfn.h"
 #include "umlaut.h"   /* always include last */
 
 #define APP_VERSION "0.9.5a"
@@ -761,22 +762,22 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
  * FTP_ERR_ABORT (user cancel) or another FTP_ERR_* code. */
 static int copy_one_entry(int to_remote, PanelEntry *e, CopyCtx *cc)
 {
-    char localpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
+    char localpath[PANEL_HEADER_MAX + 260 + 4];
 
-    join_local(localpath, (int)sizeof(localpath), g_left.path(), e->name);
+    join_local(localpath, (int)sizeof(localpath), g_left.path(), entry_name(e));
 
     if (to_remote) {
         if (e->is_dir)
-            return dircopy_upload(&g_ftp, localpath, e->name,
+            return dircopy_upload(&g_ftp, localpath, entry_name(e),
                                   copy_item, copy_progress, copy_conflict, cc);
         /* Single file: does it already exist remotely? */
-        if (g_ftp.remote_file_exists(e->name)) {
-            int d = copy_conflict(cc, e->name);
+        if (g_ftp.remote_file_exists(entry_name(e))) {
+            int d = copy_conflict(cc, entry_name(e));
             if (d == DC_ABORT) return FTP_ERR_ABORT;
             if (d == DC_SKIP)  return FTP_OK;
         }
-        copy_item(cc, e->name, 0);
-        return g_ftp.stor(localpath, e->name, copy_progress, cc);
+        copy_item(cc, entry_name(e), 0);
+        return g_ftp.stor(localpath, entry_name(e), copy_progress, cc);
     } else {
         if (e->is_dir)
             return dircopy_download(&g_ftp, entry_name(e), localpath,
@@ -930,7 +931,7 @@ static void do_view(void)
 
     if (g_active == (Panel *)&g_left) {
         /* View local file directly. */
-        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
         view_file(path, e->name);
     } else {
         /* Remote: download to a temporary local file, view it, then delete it. */
@@ -991,7 +992,7 @@ static void do_checksum(void)
     if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
 
     if (g_active == (Panel *)&g_left) {
-        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
     } else {
         /* Remote: download to a temporary local file first. */
         int rc;
@@ -1211,7 +1212,7 @@ static void do_edit(void)
         return;
     }
 
-    join_local(path, (int)sizeof(path), g_left.path(), e->name);
+    join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
     strcpy(keep, e->name);
     edit_file(path, e->name);
 
@@ -1272,8 +1273,8 @@ static int delete_one_entry(int on_remote, PanelEntry *e)
     if (on_remote) {
         return e->is_dir ? g_ftp.remove_dir(entry_name(e)) : g_ftp.remove_file(entry_name(e));
     } else {
-        char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        char path[PANEL_HEADER_MAX + 260 + 4];
+        join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
         if (e->is_dir) return (_rmdir(path) == 0) ? 0 : -1;
         return (remove(path) == 0) ? 0 : -1;
     }
@@ -1290,8 +1291,8 @@ static int delete_one_recursive(int on_remote, PanelEntry *e)
     if (on_remote)
         return dircopy_delete_remote(&g_ftp, entry_name(e), copy_item, 0);
     {
-        char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        char path[PANEL_HEADER_MAX + 260 + 4];
+        join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
         return dircopy_delete_local(path, copy_item, 0);
     }
 }
@@ -1309,8 +1310,8 @@ static int scan_one_entry(int from_remote, PanelEntry *e,
     if (from_remote) {
         return dircopy_measure_remote(&g_ftp, entry_name(e), nf, nd, bytes);
     } else {
-        char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        join_local(path, (int)sizeof(path), g_left.path(), e->name);
+        char path[PANEL_HEADER_MAX + 260 + 4];
+        join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
         return dircopy_measure_local(path, nf, nd, bytes);
     }
 }
@@ -1519,7 +1520,7 @@ static void do_move(void)
  * ---------------------------------------------------------------------- */
 static void do_rename(void)
 {
-    char newname[PANEL_NAME_MAX];
+    char newname[260];
     char prompt[64];
     PanelEntry *e;
     int rc;
@@ -1528,10 +1529,10 @@ static void do_rename(void)
     e = g_active->selected();
     if (e == 0 || e->is_parent) { redraw_all(); return; }
 
-    strncpy(newname, e->name, sizeof(newname) - 1);
+    strncpy(newname, entry_name(e), sizeof(newname) - 1);
     newname[sizeof(newname) - 1] = '\0';
     sprintf(prompt, L("Rename \"%.20s\" to:", "\"%.20s\" umbenennen in:"), e->name);
-    if (!dlg_input(L("Rename", "Umbenennen"), prompt, newname, PANEL_NAME_MAX - 1, 0)) { redraw_all(); return; }
+    if (!dlg_input(L("Rename", "Umbenennen"), prompt, newname, (int)sizeof(newname) - 1, 0)) { redraw_all(); return; }
     if (newname[0] == '\0')            { redraw_all(); return; }
     if (strcmp(newname, e->name) == 0) { redraw_all(); return; }   /* unchanged */
 
@@ -1548,9 +1549,9 @@ static void do_rename(void)
         else
             { g_right.refresh(); g_right.select_by_name(newname); }
     } else {
-        char oldpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        char newpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        join_local(oldpath, (int)sizeof(oldpath), g_left.path(), e->name);
+        char oldpath[PANEL_HEADER_MAX + 260 + 4];
+        char newpath[PANEL_HEADER_MAX + 260 + 4];
+        join_local(oldpath, (int)sizeof(oldpath), g_left.path(), entry_name(e));
         join_local(newpath, (int)sizeof(newpath), g_left.path(), newname);
         if (rename(oldpath, newpath) != 0)
             dlg_error(L("Rename failed", "Umbenennen fehlgeschlagen"),
@@ -1805,6 +1806,10 @@ int main(int argc, char *argv[])
         }
         if (want_help) { print_usage(); return 0; }
     }
+
+    /* Detect Long Filename support (DOS 7.x / DOSLFN). Must be called before
+     * the first refresh() so lpanel.cpp uses the right API path. */
+    lfn_detect();
 
     /* Make critical DOS errors (empty drive etc.) fail automatically
      * instead of letting "Abort, Retry, Fail?" wreck the TUI. */
