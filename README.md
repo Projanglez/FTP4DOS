@@ -110,6 +110,10 @@ encrypted — and FTP transmits passwords in plain text anyway.
 
 ## Performance tuning
 
+> **Advanced — totally optional.** FTP4DOS works fine out of the box with
+> sensible defaults; only dig into this if you want to squeeze out more
+> throughput on your specific hardware.
+
 Transfer buffer sizes have a large impact on throughput, and the optimal
 values are hardware-specific (disk speed, CPU, packet driver quality).
 FTP4DOS reads the following optional settings from your mTCP configuration
