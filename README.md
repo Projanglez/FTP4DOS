@@ -28,6 +28,9 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 - **Site manager** — save and load multiple named FTP connection profiles (host, port, user, password, start directory) in `FTP4DOS.SIT`, reached from the **[Manage...]** button in the connect dialog
 - File checksums (Alt+F9): CRC32 + MD5 for local and remote files, optionally saved to a file
 - **Long remote file names** kept in full (beyond the 8.3 / 40-column display) and used for transfers; **Alt+F2 "Detail"** shows the complete name and size
+- **Long local file names (LFN)** on systems with an LFN API (Windows 9x DOS, MS-DOS 7.x, or [DOSLFN](http://adoxa.altervista.org/doslfn/) on plain DOS): the local panel lists and handles long names natively
+- **UTF-8 remote file names** (RFC 2640): names from modern servers are converted to the active DOS codepage (CP437, CP850/858, CP866) for display and local file names; uploads to servers announcing `UTF8` in FEAT are encoded back to UTF-8. Override the detected codepage with `FTP4DOS_CODEPAGE` in `MTCP.CFG`
+- **Tunable transfer buffers** via `MTCP.CFG` for maximum throughput on your hardware (see [Performance tuning](#performance-tuning))
 - **Large remote directories** — the default listing holds 512 entries (with a popup when there are more); start with **`/EXMEM`** to store the remote list in **extended (XMS) or expanded (EMS) memory** and browse directories with several thousand files
 - Bilingual German/English UI (auto-detected from DOS country setting, or forced on the command line: `FTP4DOS /L:EN`)
 
@@ -39,23 +42,20 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 
 ## Building
 
-mTCP is an **external dependency** and is not part of this repository.
-This project builds against the **official mTCP, version 2025-01-10**.
-Download the source archive from the official mTCP home page (there is no
-official git repository) and extract it into the `mtcp/` directory:
-
-- mTCP home page: <http://www.brutman.com/mTCP/mTCP.html>
-
-After extracting, the layout must be `mtcp/TCPLIB/`, `mtcp/TCPINC/`,
-`mtcp/INCLUDE/` and `mtcp/APPS/FTP/`. Always use the current official
-release rather than a third-party mirror.
-
-Then build with Open Watcom:
+mTCP is an **external dependency**, included as a **git submodule** of the
+official repository <https://github.com/mbbrutman/mTCP>, pinned to the
+**2025-01-10** release tag. Clone with submodules and build with Open Watcom:
 
 ```sh
+git clone --recursive https://github.com/Projanglez/ftp4dos.git
+# or, in an existing checkout:
+git submodule update --init
+
 wmake          # produces FTP4DOS.EXE
 wmake clean    # removes objects and build artifacts
 ```
+
+- mTCP home page: <http://www.brutman.com/mTCP/mTCP.html>
 
 Note: mTCP is compiled with `-0` (8086), and the application code likewise
 uses `-0` (compatible with 8086/286/386+). Details are in `MAKEFILE` and `CLAUDE.md`.
@@ -108,6 +108,30 @@ dialog) keeps any number of named profiles in `FTP4DOS.SIT`.
 **Security note:** Stored passwords are lightly obfuscated (XOR + hex), not
 encrypted — and FTP transmits passwords in plain text anyway.
 
+## Performance tuning
+
+Transfer buffer sizes have a large impact on throughput, and the optimal
+values are hardware-specific (disk speed, CPU, packet driver quality).
+FTP4DOS reads the following optional settings from your mTCP configuration
+file (`MTCPCFG`):
+
+| Setting | Range | Default | Description |
+|---------|-------|---------|-------------|
+| `FTP4DOS_TCP_BUFFER` | 512–16384 | 16384 | TCP receive buffer (window) of the data connection |
+| `FTP4DOS_FILE_BUFFER` | 512–32768 | 8192 | File I/O buffer: received data is written to disk in blocks of this size (uploads read in the same blocks) |
+| `FTP4DOS_CODEPAGE` | 437/850/858/866 | auto | Codepage for UTF-8 file name conversion (default: active DOS codepage) |
+
+The mTCP FTP client settings `FTP_TCP_BUFFER` / `FTP_FILE_BUFFER` are read
+as fallbacks, so an already tuned `MTCP.CFG` works as-is; the `FTP4DOS_*`
+keys take precedence. Experiment: larger file buffers help most machines
+(especially with slow disk I/O), but some setups are faster with small ones.
+Example:
+
+```
+FTP4DOS_TCP_BUFFER 16384
+FTP4DOS_FILE_BUFFER 32768
+```
+
 ## Key bindings
 
 | Key | Action |
@@ -154,13 +178,12 @@ mTCP © Michael B. Brutman — official home page:
 <http://www.brutman.com/mTCP/mTCP.html>
 
 This project builds against the **official mTCP, version 2025-01-10**,
-unmodified, obtained from the mTCP home page above. That exact source,
-together with the source in this repository, constitutes the complete
-corresponding source for any distributed binary (GPLv3 §6). Published
-releases include a copy of those mTCP sources as an additional release asset.
-
-Please download mTCP from the official home page to obtain the current
-version; always prefer the official release over any third-party mirror.
+unmodified, referenced as a git submodule of the official repository
+<https://github.com/mbbrutman/mTCP> (pinned to the `2025-01-10` release
+tag). That exact source, together with the source in this repository,
+constitutes the complete corresponding source for any distributed binary
+(GPLv3 §6). Published releases include a copy of those mTCP sources as an
+additional release asset.
 
 ## Disclaimer
 
