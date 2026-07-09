@@ -43,16 +43,25 @@
 #define CONNECT_TIMEOUT_MS  5000ul
 #define CONTROL_RECV_SIZE    1024
 #define DATA_RECV_SIZE      16384   /* mTCP maximum; large receive window      */
-/* Read/write block size for transfers. On download, the TCP receive buffer
- * is drained COMPLETELY on every loop pass (see retr()), so a medium-sized
- * block is enough - it only needs to be >= MSS so we drain faster than the
- * server fills it. */
+/* Read block size for the LIST data connection (goes to memory, uncritical). */
 #define DATA_CHUNK           4096
+/* File transfer buffer: received data is accumulated here and written to
+ * disk in large blocks (small writes are expensive on old machines - see
+ * the mTCP FTP client, FTP_FILE_BUFFER). Both sizes are configurable in
+ * MTCP.CFG: FTP4DOS_TCP_BUFFER / FTP4DOS_FILE_BUFFER, with the mTCP FTP
+ * client's FTP_TCP_BUFFER / FTP_FILE_BUFFER as fallback keys. */
+#define FILE_BUF_DEFAULT     8192
+#define FILE_BUF_MAX        32768UL
+#define TCP_BUF_MAX         16384UL
+#define BUF_CFG_MIN           512UL
 
 
 /* --- File-local state ----------------------------------------------------- */
 static int g_stackUp = 0;             /* did initStack succeed?       */
 static uint16_t g_nextLocalPort = 4096;
+static uint16_t g_tcpBufSize  = DATA_RECV_SIZE;    /* data socket recv buffer */
+static uint16_t g_fileBufSize = FILE_BUF_DEFAULT;  /* file transfer buffer    */
+static uint8_t *g_fileBuf     = 0;                 /* allocated in init_stack */
 
 static uint16_t nextLocalPort(void) {
     uint16_t p = g_nextLocalPort++;
@@ -72,7 +81,16 @@ static unsigned long elapsedMs(clockTicks_t start) {
     return (unsigned long)Timer_diff(start, TIMER_GET_CURRENT()) * TIMER_TICK_LEN;
 }
 
-/* Drain the data connection 'ds' into 'f' as far as possible (RETR download).
+/* Accumulation state for the file transfer buffer. Shared between the
+ * readReply() drain hook and the main transfer loop in retr(), so the fill
+ * offset stays consistent across both. */
+struct XferBuf {
+    uint8_t  *buf;      /* g_fileBuf                          */
+    uint16_t  size;     /* g_fileBufSize                      */
+    uint16_t  used;     /* accumulated bytes not yet written  */
+};
+
+/* Drain the data connection 'ds' as far as possible (RETR download).
  * This keeps the receive window open; otherwise it drops below one MSS or to
  * zero, the server stalls (Silly Window Syndrome) and sends nothing further
  * until its own persist probe fires (server-dependent, often several
@@ -80,19 +98,43 @@ static unsigned long elapsedMs(clockTicks_t start) {
  * out of the zero state (TcpSocket::recv -> sendPureAck, mtcp/TCPLIB/TCP.CPP);
  * mTCP's own zero-window probe interval is 1s (TCP_PROBE_INTERVAL,
  * TCPINC/TCP.H) - there is no 5s timer in mTCP. Behavior verified against
- * mTCP 2025-01-10. Returns: >0 bytes written (added to *total), 0 nothing
- * available, -1 write error, -2 connection closed. */
-static int drainToFile(TcpSocket *ds, FILE *f, uint8_t *buf, int bufsz,
+ * mTCP 2025-01-10.
+ * Received data is accumulated in xb and only written to 'f' once the
+ * buffer is full: one large write instead of many per-MSS writes (the
+ * latter is the difference between 10 KB/s and full speed on machines
+ * with slow disk I/O). recv() itself still empties the TCP buffer on
+ * every pass, so the window stays open regardless of the write bundling.
+ * Returns: >0 bytes received (added to *total), 0 nothing available,
+ * -1 write error, -2 connection closed. */
+static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
                        unsigned long *total) {
     int16_t n;
-    int wrote = 0;
-    while ((n = ds->recv(buf, (uint16_t)bufsz)) > 0) {
-        if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) return -1;
+    int got = 0;
+    for (;;) {
+        if (xb->used == xb->size) {
+            if (fwrite(xb->buf, 1, (size_t)xb->size, f) != (size_t)xb->size)
+                return -1;
+            xb->used = 0;
+        }
+        n = ds->recv(xb->buf + xb->used, (uint16_t)(xb->size - xb->used));
+        if (n <= 0) break;
+        xb->used += (uint16_t)n;
         *total += (unsigned long)n;
-        wrote = 1;
+        got = 1;
     }
     if (n < 0) return -2;
-    return wrote;
+    return got;
+}
+
+/* Write out whatever is still accumulated in xb (end of transfer).
+ * Returns 0 on success, -1 on write error. */
+static int flushXferBuf(XferBuf *xb, FILE *f) {
+    if (xb->used) {
+        if (fwrite(xb->buf, 1, (size_t)xb->used, f) != (size_t)xb->used)
+            return -1;
+        xb->used = 0;
+    }
+    return 0;
 }
 
 /* Context for draining the data connection WHILE readReply() is waiting for
@@ -101,8 +143,7 @@ static int drainToFile(TcpSocket *ds, FILE *f, uint8_t *buf, int bufsz,
 struct DrainCtx {
     TcpSocket     *ds;
     FILE          *f;
-    uint8_t       *buf;
-    int            sz;
+    XferBuf       *xb;
     unsigned long *total;
     int            err;     /* set to 1 on a write error */
 };
@@ -123,10 +164,44 @@ static void __interrupt __far ctrlBreakHandler(void) {
     g_ctrlBreakDetected = 1;
 }
 
+/* Read one buffer size from MTCP.CFG: 'key' wins over 'fallbackKey' (the
+ * key the mTCP FTP client uses, so already-tuned configs work as-is).
+ * Out-of-range or missing values keep 'def'. */
+static uint16_t cfgBufSize(const char *key, const char *fallbackKey,
+                           unsigned long maxv, uint16_t def) {
+    char tmp[10];
+    if (Utils::getAppValue((char *)key, tmp, sizeof(tmp)) != 0 &&
+        Utils::getAppValue((char *)fallbackKey, tmp, sizeof(tmp)) != 0)
+        return def;
+    unsigned long v = strtoul(tmp, 0, 10);   /* atoi overflows at 32768 */
+    if (v < BUF_CFG_MIN || v > maxv) return def;
+    return (uint16_t)v;
+}
+
 int FtpClient::init_stack(void) {
     if (g_stackUp) return FTP_OK;
     /* Reads the MTCPCFG env variable + the configuration file. */
     if (Utils::parseEnv() != 0) return FTP_ERR_GENERAL;
+
+    /* Optional tuning values from MTCP.CFG (see FILE_BUF_DEFAULT above). */
+    Utils::openCfgFile();
+    g_tcpBufSize  = cfgBufSize("FTP4DOS_TCP_BUFFER", "FTP_TCP_BUFFER",
+                               TCP_BUF_MAX, DATA_RECV_SIZE);
+    g_fileBufSize = cfgBufSize("FTP4DOS_FILE_BUFFER", "FTP_FILE_BUFFER",
+                               FILE_BUF_MAX, FILE_BUF_DEFAULT);
+    Utils::closeCfgFile();
+
+    /* File transfer buffer (far heap, not DGROUP). If the configured size
+     * cannot be allocated, halve until it fits (never below 2048). */
+    if (!g_fileBuf) {
+        for (;;) {
+            g_fileBuf = (uint8_t *)malloc(g_fileBufSize);
+            if (g_fileBuf || g_fileBufSize <= 2048) break;
+            g_fileBufSize /= 2;
+        }
+        if (!g_fileBuf) return FTP_ERR_GENERAL;
+    }
+
     if (Utils::initStack(TCP_MAX_SOCKETS, TCP_MAX_XMIT_BUFS,
                          ctrlBreakHandler, ctrlBreakHandler) != 0) return FTP_ERR_GENERAL;
     g_stackUp = 1;
@@ -239,7 +314,7 @@ int FtpClient::readReply(void *drainCtxv) {
     for (;;) {
         driveStack();
         if (dc) {
-            int dr = drainToFile(dc->ds, dc->f, dc->buf, dc->sz, dc->total);
+            int dr = drainToFile(dc->ds, dc->f, dc->xb, dc->total);
             if (dr == -1) dc->err = 1;
         }
         int16_t n = s->recv(&ch, 1);
@@ -343,7 +418,7 @@ int FtpClient::openDataConn(void **dataSockOut) {
 
     TcpSocket *d = TcpSocketMgr::getSocket();
     if (!d) { setError(L("No free socket for data connection", "Kein freier Socket f" ue "r Datenverbindung")); return FTP_ERR_DATACONN; }
-    if (d->setRecvBuffer(DATA_RECV_SIZE)) {
+    if (d->setRecvBuffer(g_tcpBufSize)) {
         TcpSocketMgr::freeSocket(d);
         setError(L("Not enough memory for data buffer", "Zu wenig Speicher f" ue "r Datenpuffer"));
         return FTP_ERR_DATACONN;
@@ -645,7 +720,8 @@ int FtpClient::retr(const char *remote, const char *localpath,
 
     TcpSocket *ds = (TcpSocket *)d;
     unsigned long total = 0;
-    uint8_t buf[DATA_CHUNK];
+    XferBuf xb;
+    xb.buf = g_fileBuf; xb.size = g_fileBufSize; xb.used = 0;
     int ioerr = 0;
     int code;
 
@@ -658,7 +734,7 @@ int FtpClient::retr(const char *remote, const char *localpath,
      * start. */
     {
         DrainCtx dc;
-        dc.ds = ds; dc.f = f; dc.buf = buf; dc.sz = (int)sizeof(buf);
+        dc.ds = ds; dc.f = f; dc.xb = &xb;
         dc.total = &total; dc.err = 0;
         code = readReply(&dc);               /* 150 / 125 */
         if (dc.err) ioerr = 1;
@@ -677,7 +753,7 @@ int FtpClient::retr(const char *remote, const char *localpath,
         driveStack();
         /* Drain the buffer completely on every pass: keeps the TCP window
          * open so the server doesn't stall due to Silly Window Syndrome. */
-        dr = drainToFile(ds, f, buf, (int)sizeof(buf), &total);
+        dr = drainToFile(ds, f, &xb, &total);
         if (dr == -1) { ioerr = 1; break; }
         if (dr > 0) {
             start = TIMER_GET_CURRENT();
@@ -687,6 +763,10 @@ int FtpClient::retr(const char *remote, const char *localpath,
         if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
         if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
     }
+
+    /* Write out the remaining partial buffer (skipped on abort: the file
+     * is discarded anyway). */
+    if (ioerr != 3 && flushXferBuf(&xb, f) != 0) ioerr = 1;
 
     fclose(f);
     closeData(d);
@@ -744,18 +824,19 @@ int FtpClient::stor(const char *localpath, const char *remote,
 
     TcpSocket *ds = (TcpSocket *)d;
     unsigned long sent = 0;
-    uint8_t buf[DATA_CHUNK];
     int ioerr = 0;
 
     for (;;) {
-        size_t r = fread(buf, 1, sizeof(buf), f);
+        /* Large read blocks (g_fileBufSize): cheap sequential disk reads;
+         * the send loop below slices them into TCP segments anyway. */
+        size_t r = fread(g_fileBuf, 1, g_fileBufSize, f);
         if (r == 0) break;
 
         uint16_t off = 0;
         clockTicks_t start = TIMER_GET_CURRENT();
         while (off < r) {
             driveStack();
-            int16_t ns = ds->send(buf + off, (uint16_t)(r - off));
+            int16_t ns = ds->send(g_fileBuf + off, (uint16_t)(r - off));
             if (ns > 0) {
                 off += (uint16_t)ns; start = TIMER_GET_CURRENT();
             } else if (ns == 0) {
