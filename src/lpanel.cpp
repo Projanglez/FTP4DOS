@@ -2,12 +2,22 @@
  * lpanel.cpp - Local filesystem panel
  * -----------------------------------------------------------------------------
  * Compiler: Open Watcom (wpp), Large Memory Model, 16-bit Real-Mode DOS.
+ *
+ * When LFN is available (lfn_available() != 0) refresh() uses the
+ * Int 21h AX=714Eh/714Fh API to enumerate the directory so that long file
+ * names are returned. Names that exceed PANEL_NAME_MAX-1 characters are
+ * interned in the namePool and accessed via PanelEntry::fullname (same seam
+ * used by RemotePanel for long FTP names). The display name in entry::name
+ * is truncated to PANEL_NAME_MAX-1 chars with a trailing '>' marker.
+ *
+ * On plain DOS (no LFN) the code falls back to _dos_findfirst/_dos_findnext,
+ * which is identical to the original behaviour.
  * ===========================================================================*/
-#include <dos.h>      /* _dos_findfirst/_dos_findnext, _A_* , struct find_t  */
-#include <direct.h>   /* getcwd, chdir                                       */
-#include <string.h>   /* strncpy, strcpy, stricmp, strncat                   */
-#include <stdio.h>    /* sprintf                                             */
-#include <stdlib.h>
+#include <dos.h>      /* _dos_findfirst/_dos_findnext, _A_*, struct find_t   */
+#include <direct.h>   /* getcwd, chdir, _mkdir                               */
+#include <string.h>   /* strncpy, strcpy, stricmp, strncat, strlen           */
+#include <stdio.h>    /* sprintf                                              */
+#include <stdlib.h>   /* malloc, free                                        */
 
 #include "lpanel.h"
 
@@ -25,58 +35,124 @@ static void path_leaf(const char *path, char *out, int outsz)
 
 LocalPanel::LocalPanel()
 {
-    cwd[0] = '\0';
+    cwd[0]   = '\0';
+    namePool = 0;
+    poolUsed = 0;
+    poolSize = 0;
+}
+
+LocalPanel::~LocalPanel()
+{
+    free(namePool);
+    namePool = 0;
+}
+
+/* Intern a long name into the pool. Returns a stable pointer or 0 if full. */
+char *LocalPanel::pool_store(const char *s)
+{
+    unsigned len = (unsigned)strlen(s) + 1;
+    if (!namePool || poolUsed + len > poolSize) return 0;
+    char *dst = namePool + poolUsed;
+    memcpy(dst, s, len);
+    poolUsed += len;
+    return dst;
 }
 
 /* Determine the current working directory (including drive). */
 void LocalPanel::read_cwd()
 {
-    if (getcwd(cwd, PANEL_HEADER_MAX) == 0) {
-        /* Fallback in case getcwd fails. */
-        strcpy(cwd, "C:\\");
+    if (lfn_available()) {
+        if (lfn_getcwd(cwd, PANEL_HEADER_MAX) == 0) return;
     }
+    /* Fallback: standard getcwd (8.3 path on non-LFN systems). */
+    if (getcwd(cwd, PANEL_HEADER_MAX) == 0)
+        strcpy(cwd, "C:\\");
 }
 
 /* Re-read the directory. Returns: number of entries. */
 int LocalPanel::refresh()
 {
-    struct find_t ff;
-    unsigned amask = _A_SUBDIR | _A_HIDDEN | _A_SYSTEM | _A_RDONLY | _A_ARCH;
-    unsigned rc;
-
-    count = 0;
-    total = 0;
+    count     = 0;
+    total     = 0;
     truncated = 0;
     store->reset();
     read_cwd();
     strncpy(header, cwd, PANEL_HEADER_MAX - 1);
     header[PANEL_HEADER_MAX - 1] = '\0';
 
-    rc = _dos_findfirst("*.*", amask, &ff);
-    while (rc == 0) {
-        /* Skip "." (the current directory). */
-        if (!(ff.name[0] == '.' && ff.name[1] == '\0')) {
-            PanelEntry e;
-            total++;
-            strncpy(e.name, ff.name, PANEL_NAME_MAX - 1);
-            e.name[PANEL_NAME_MAX - 1] = '\0';
-            e.fullname  = 0;             /* 8.3 names always fit in 'name' */
-            e.size      = ff.size;
-            e.date      = ff.wr_date;
-            e.time      = ff.wr_time;
-            e.is_dir    = (ff.attrib & _A_SUBDIR) ? 1 : 0;
-            e.is_parent = (ff.name[0] == '.' && ff.name[1] == '.' &&
-                           ff.name[2] == '\0') ? 1 : 0;
-            e.marked    = 0;
-            if (store->append(&e)) count++;
-            else                   truncated = 1;
+    /* Lazy-allocate the name pool; reset it on every refresh. */
+    if (namePool == 0) {
+        namePool = (char *)malloc(LOCAL_NAME_POOL);
+        poolSize = namePool ? LOCAL_NAME_POOL : 0;
+    }
+    poolUsed = 0;
+
+    if (lfn_available()) {
+        /* ---- LFN path: Int 21h AX=714Eh/714Fh ---- */
+        LfnFindData fd;
+        int handle = lfn_findfirst("*", &fd);
+        while (handle >= 0) {
+            /* Skip "." but keep ".." */
+            if (!(fd.name[0] == '.' && fd.name[1] == '\0')) {
+                PanelEntry e;
+                total++;
+                /* Store the full LFN in the pool when it exceeds the name
+                 * column; truncate the display name with a '>' marker. */
+                int namelen = (int)strlen(fd.name);
+                if (namelen >= PANEL_NAME_MAX) {
+                    strncpy(e.name, fd.name, PANEL_NAME_MAX - 2);
+                    e.name[PANEL_NAME_MAX - 2] = '>';
+                    e.name[PANEL_NAME_MAX - 1] = '\0';
+                    e.fullname = pool_store(fd.name);
+                } else {
+                    strncpy(e.name, fd.name, PANEL_NAME_MAX - 1);
+                    e.name[PANEL_NAME_MAX - 1] = '\0';
+                    e.fullname = 0;
+                }
+                /* LFN wtime: HIWORD = DOS date, LOWORD = DOS time. */
+                e.date     = (unsigned)(fd.wtime >> 16);
+                e.time     = (unsigned)(fd.wtime & 0xFFFFU);
+                e.size     = fd.size_lo;
+                e.is_dir   = (fd.attr & LFN_A_SUBDIR) ? 1 : 0;
+                e.is_parent = (fd.name[0] == '.' && fd.name[1] == '.'
+                               && fd.name[2] == '\0') ? 1 : 0;
+                e.marked   = 0;
+                if (store->append(&e)) count++;
+                else                   truncated = 1;
+            }
+            if (lfn_findnext(handle, &fd) != 0) {
+                lfn_findclose(handle);
+                break;
+            }
         }
-        rc = _dos_findnext(&ff);
+    } else {
+        /* ---- SFN path: _dos_findfirst/_dos_findnext (original) ---- */
+        struct find_t ff;
+        unsigned amask = _A_SUBDIR | _A_HIDDEN | _A_SYSTEM | _A_RDONLY | _A_ARCH;
+        unsigned rc = _dos_findfirst("*.*", amask, &ff);
+        while (rc == 0) {
+            if (!(ff.name[0] == '.' && ff.name[1] == '\0')) {
+                PanelEntry e;
+                total++;
+                strncpy(e.name, ff.name, PANEL_NAME_MAX - 1);
+                e.name[PANEL_NAME_MAX - 1] = '\0';
+                e.fullname  = 0;
+                e.size      = ff.size;
+                e.date      = ff.wr_date;
+                e.time      = ff.wr_time;
+                e.is_dir    = (ff.attrib & _A_SUBDIR) ? 1 : 0;
+                e.is_parent = (ff.name[0] == '.' && ff.name[1] == '.'
+                               && ff.name[2] == '\0') ? 1 : 0;
+                e.marked    = 0;
+                if (store->append(&e)) count++;
+                else                   truncated = 1;
+            }
+            rc = _dos_findnext(&ff);
+        }
     }
 
     sort_entries();
-
-    cursor = 0;
+    cursor   = 0;
     topentry = 0;
     return count;
 }
@@ -87,18 +163,18 @@ int LocalPanel::refresh()
 int LocalPanel::enter_selected()
 {
     PanelEntry *e = selected();
-    if (e == 0)        return 0;
-    if (!e->is_dir)    return 0;
+    if (e == 0)     return 0;
+    if (!e->is_dir) return 0;
 
     if (e->is_parent) {
-        /* Going up: afterwards put the cursor on the directory we left. */
         char leaf[PANEL_NAME_MAX];
         path_leaf(cwd, leaf, sizeof(leaf));
         chdir("..");
         refresh();
         select_by_name(leaf);
     } else {
-        chdir(e->name);
+        /* Use entry_name() so LFN directory names > 39 chars work. */
+        chdir(entry_name(e));
         refresh();
     }
     return 1;
