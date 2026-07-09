@@ -40,7 +40,7 @@
 #include "lfn.h"
 #include "umlaut.h"   /* always include last */
 
-#define APP_VERSION "0.9.5a"
+#define APP_VERSION "0.9.6"
 
 /* ---- Screen layout ---- */
 #define PANEL_TOP     0
