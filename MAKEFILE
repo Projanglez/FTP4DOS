@@ -5,15 +5,16 @@
 #
 # Prerequisites:
 #   - Open Watcom C/C++ installed and in PATH (WATCOM env variable set)
-#   - Official mTCP sources (version 2025-01-10) from the mTCP homepage:
-#       http://www.brutman.com/mTCP/mTCP.html
-#     Download the source archive and unpack it into ./mtcp/.
+#   - Official mTCP sources as a git submodule in ./mtcp/ (pinned to the
+#     "2025-01-10" release tag of https://github.com/mbbrutman/mTCP.git):
+#       git clone --recursive <this repo>     (fresh clone)
+#       git submodule update --init           (existing checkout)
 #
-# Directory structure after unpacking:
-#   ./mtcp/TCPLIB/   = TCP/IP library sources (.CPP)
-#   ./mtcp/TCPINC/   = TCP/IP header files
-#   ./mtcp/INCLUDE/  = cross-app shared includes
-#   ./mtcp/APPS/FTP/ = reference FTP client (for looking things up)
+# Submodule layout (sources live under src/):
+#   ./mtcp/src/TCPLIB/   = TCP/IP library sources (.CPP)
+#   ./mtcp/src/TCPINC/   = TCP/IP header files
+#   ./mtcp/src/INCLUDE/  = cross-app shared includes
+#   ./mtcp/src/APPS/FTP/ = reference FTP client (for looking things up)
 #
 # Build:  wmake
 # Clean:  wmake clean
@@ -37,7 +38,7 @@ RM      = del /Q /F
 # -ei  = enum as int
 # -----------------------------------------------------------------------------
 CFLAGS  = -ml -0 -zu -s -ox -bt=dos -zp1 -ei
-INCPATH = -I./src -I./mtcp/TCPINC -I./mtcp/INCLUDE
+INCPATH = -I./src -I./mtcp/src/TCPINC -I./mtcp/src/INCLUDE
 
 # -----------------------------------------------------------------------------
 # Output
@@ -69,23 +70,23 @@ APP_OBJS = &
 
 # -----------------------------------------------------------------------------
 # mTCP core objects (from TCPLIB/)
-# See mtcp\APPS\FTP\makefile for the exact file list.
+# See mtcp\src\APPS\FTP\makefile for the exact file list.
 # File list for the official 2025-01-10 version. Compared to older mTCP
 # versions, trace.obj was added as a fixed dependency of the FTP client.
 # -----------------------------------------------------------------------------
 MTCP_OBJS = &
-    mtcp\TCPLIB\arp.obj &
-    mtcp\TCPLIB\dns.obj &
-    mtcp\TCPLIB\eth.obj &
-    mtcp\TCPLIB\ip.obj &
-    mtcp\TCPLIB\ipasm.obj &
-    mtcp\TCPLIB\packet.obj &
-    mtcp\TCPLIB\tcp.obj &
-    mtcp\TCPLIB\tcpsockm.obj &
-    mtcp\TCPLIB\timer.obj &
-    mtcp\TCPLIB\trace.obj &
-    mtcp\TCPLIB\udp.obj &
-    mtcp\TCPLIB\utils.obj
+    mtcp\src\TCPLIB\arp.obj &
+    mtcp\src\TCPLIB\dns.obj &
+    mtcp\src\TCPLIB\eth.obj &
+    mtcp\src\TCPLIB\ip.obj &
+    mtcp\src\TCPLIB\ipasm.obj &
+    mtcp\src\TCPLIB\packet.obj &
+    mtcp\src\TCPLIB\tcp.obj &
+    mtcp\src\TCPLIB\tcpsockm.obj &
+    mtcp\src\TCPLIB\timer.obj &
+    mtcp\src\TCPLIB\trace.obj &
+    mtcp\src\TCPLIB\udp.obj &
+    mtcp\src\TCPLIB\utils.obj
 
 ALL_OBJS = $(APP_OBJS) $(MTCP_OBJS)
 
@@ -162,7 +163,7 @@ src\i18n.obj: src\i18n.cpp src\i18n.h
 
 # -----------------------------------------------------------------------------
 # mTCP core sources (TCPLIB/)
-# Flags: additionally -I./mtcp/TCPLIB for internal mTCP includes
+# Flags: additionally -I./mtcp/src/TCPLIB for internal mTCP includes
 # -----------------------------------------------------------------------------
 # -DCFG_H="ncftp.cfg": every mTCP header does `#include CFG_H`.
 # ncftp.cfg lives in src/ and is found via -I./src (in INCPATH).
@@ -186,43 +187,43 @@ src\i18n.obj: src\i18n.cpp src\i18n.h
 # on the 386; only our own app code uses -3. (ipasm.asm: already wasm -0,
 # see below.)
 MCFLAGS = -ml -0 -zu -s -ox -bt=dos -zp1 -ei
-MFLAGS  = $(MCFLAGS) -DCFG_H="ncftp.cfg" -I./mtcp/TCPLIB $(INCPATH)
+MFLAGS  = $(MCFLAGS) -DCFG_H="ncftp.cfg" -I./mtcp/src/TCPLIB $(INCPATH)
 
-mtcp\TCPLIB\arp.obj: mtcp\TCPLIB\arp.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\arp.obj: mtcp\src\TCPLIB\arp.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\dns.obj: mtcp\TCPLIB\dns.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\dns.obj: mtcp\src\TCPLIB\dns.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\eth.obj: mtcp\TCPLIB\eth.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\eth.obj: mtcp\src\TCPLIB\eth.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\ip.obj: mtcp\TCPLIB\ip.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\ip.obj: mtcp\src\TCPLIB\ip.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
 # ipasm.asm selects the memory model via __LARGE__ (set by wasm -ml).
-mtcp\TCPLIB\ipasm.obj: mtcp\TCPLIB\ipasm.asm
+mtcp\src\TCPLIB\ipasm.obj: mtcp\src\TCPLIB\ipasm.asm
     $(ASM) -0 -ml -fo=$@ $[@
 
-mtcp\TCPLIB\packet.obj: mtcp\TCPLIB\packet.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\packet.obj: mtcp\src\TCPLIB\packet.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\tcp.obj: mtcp\TCPLIB\tcp.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\tcp.obj: mtcp\src\TCPLIB\tcp.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\tcpsockm.obj: mtcp\TCPLIB\tcpsockm.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\tcpsockm.obj: mtcp\src\TCPLIB\tcpsockm.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\timer.obj: mtcp\TCPLIB\timer.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\timer.obj: mtcp\src\TCPLIB\timer.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\trace.obj: mtcp\TCPLIB\trace.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\trace.obj: mtcp\src\TCPLIB\trace.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\udp.obj: mtcp\TCPLIB\udp.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\udp.obj: mtcp\src\TCPLIB\udp.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
-mtcp\TCPLIB\utils.obj: mtcp\TCPLIB\utils.cpp src\ncftp.cfg
+mtcp\src\TCPLIB\utils.obj: mtcp\src\TCPLIB\utils.cpp src\ncftp.cfg
     $(CPP) $(MFLAGS) -fo=$@ $[@
 
 # -----------------------------------------------------------------------------
@@ -230,7 +231,7 @@ mtcp\TCPLIB\utils.obj: mtcp\TCPLIB\utils.cpp src\ncftp.cfg
 # -----------------------------------------------------------------------------
 clean: .SYMBOLIC
     -$(RM) src\*.obj 2>nul
-    -$(RM) mtcp\TCPLIB\*.obj 2>nul
+    -$(RM) mtcp\src\TCPLIB\*.obj 2>nul
     -$(RM) $(TARGET) 2>nul
     -$(RM) $(MAPFILE) 2>nul
     @echo Clean complete.
