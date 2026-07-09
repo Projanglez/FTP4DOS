@@ -66,6 +66,7 @@ APP_OBJS = &
     src\entrystore.obj &
     src\extmem.obj &
     src\checksum.obj &
+    src\cpmap.obj &
     src\i18n.obj
 
 # -----------------------------------------------------------------------------
@@ -125,10 +126,10 @@ src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\tui.h src\lfn.h
 src\lfn.obj: src\lfn.cpp src\lfn.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h src\i18n.h
+src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h src\cpmap.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg src\i18n.h
+src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg src\cpmap.h src\i18n.h
     $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
 
 src\dialog.obj: src\dialog.cpp src\dialog.h src\tui.h src\keymap.h src\i18n.h src\sites.h src\connsave.h
@@ -140,7 +141,7 @@ src\viewer.obj: src\viewer.cpp src\viewer.h src\tui.h src\keymap.h src\dialog.h 
 src\editor.obj: src\editor.cpp src\editor.h src\tui.h src\keymap.h src\dialog.h src\i18n.h src\umlaut.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\dircopy.obj: src\dircopy.cpp src\dircopy.h src\ftpcli.h src\panel.h src\rpanel.h
+src\dircopy.obj: src\dircopy.cpp src\dircopy.h src\ftpcli.h src\panel.h src\rpanel.h src\cpmap.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\connsave.obj: src\connsave.cpp src\connsave.h
@@ -156,6 +157,9 @@ src\extmem.obj: src\extmem.cpp src\extmem.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\checksum.obj: src\checksum.cpp src\checksum.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\cpmap.obj: src\cpmap.cpp src\cpmap.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\i18n.obj: src\i18n.cpp src\i18n.h

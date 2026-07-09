@@ -16,6 +16,7 @@
 #include <stdio.h>    /* sscanf, sprintf                              */
 
 #include "rpanel.h"
+#include "cpmap.h"
 #include "i18n.h"
 
 /* ------------------------------------------------------------------ */
@@ -318,10 +319,20 @@ void RemotePanel::add_line(const char *line)
     /* Count every real entry; store only while the buffer has room. */
     total++;
 
-    /* Keep the full name only when it was actually truncated into tmp.name;
-     * otherwise tmp.name already is the complete name and fullname stays 0. */
-    if (strcmp(full, tmp.name) != 0)
+    if (cpmap_is_utf8(full)) {
+        /* UTF-8 name (RFC 2640): keep the original bytes as the wire name
+         * (entry_name() -> RETR/CWD/DELE work on the real server name) and
+         * show the codepage-converted form in the panel. If the pool is
+         * full, fullname stays 0 and the entry degrades to the converted
+         * display name - same fallback as for over-long names. */
         tmp.fullname = pool_store(full);
+        cpmap_utf8_to_cp(full, tmp.name, PANEL_NAME_MAX);
+    } else if (strcmp(full, tmp.name) != 0) {
+        /* Keep the full name only when it was actually truncated into
+         * tmp.name; otherwise tmp.name already is the complete name and
+         * fullname stays 0. */
+        tmp.fullname = pool_store(full);
+    }
 
     if (store->append(&tmp)) count++;
     else                     truncated = 1;

@@ -25,6 +25,7 @@
 #include "dircopy.h"
 #include "panel.h"     /* PanelEntry, PANEL_NAME_MAX */
 #include "rpanel.h"    /* ftp_parse_list_line        */
+#include "cpmap.h"     /* UTF-8 -> DOS codepage (make_local_83) */
 
 #define DC_MAXDEPTH    16
 #define DC_PATHMAX     260
@@ -260,7 +261,8 @@ static void free_subdirs(DcSubdirs *s)
 /* ------------------------------------------------------------------ */
 
 /* 1 if 'name' already is a clean DOS 8.3 name (<=8 base, <=3 ext, one dot,
- * only FAT-safe characters). */
+ * only FAT-safe characters). Codepage characters >= 0x80 are FAT-legal
+ * (they appear after UTF-8 server names were converted, see make_local_83). */
 static int is_clean_83(const char *name)
 {
     int base = 0, ext = 0, dot = 0;
@@ -269,7 +271,7 @@ static int is_clean_83(const char *name)
     for (p = name; *p; p++) {
         unsigned char ch = (unsigned char)*p;
         if (ch == '.') { if (dot) return 0; dot = 1; continue; }
-        if (ch <= ' ' || ch > 126) return 0;
+        if (ch <= ' ' || ch == 127) return 0;
         if (strchr("\"*+,/:;<=>?[\\]|", ch)) return 0;      /* FAT-illegal */
         if (dot) { if (++ext > 3) return 0; }
         else     { if (++base > 8) return 0; }
@@ -278,14 +280,15 @@ static int is_clean_83(const char *name)
 }
 
 /* Append up to 'max' FAT-safe, uppercased characters of 'src' into dst, starting
- * at 'pos' (capped at 'cap'). Dots and illegal characters are dropped. */
+ * at 'pos' (capped at 'cap'). Dots and illegal characters are dropped;
+ * codepage characters >= 0x80 are kept (toupper leaves them alone). */
 static int san_copy(char *dst, int pos, int cap, const char *src, int max)
 {
     int k = 0;
     const char *p;
     for (p = src; *p && k < max && pos < cap - 1; p++) {
         unsigned char ch = (unsigned char)toupper((unsigned char)*p);
-        if (ch <= ' ' || ch > 126) continue;
+        if (ch <= ' ' || ch == 127) continue;
         if (strchr("\"*+,/:;<=>?[\\]|.", ch)) continue;
         dst[pos++] = (char)ch; k++;
     }
@@ -294,12 +297,20 @@ static int san_copy(char *dst, int pos, int cap, const char *src, int max)
 
 /* Produce a valid, unique 8.3 local name for (possibly long) 'name' in
  * 'localDir'. Clean 8.3 names are used verbatim; otherwise a unique
- * "PREFIX~N.EXT" is built (like VFAT short names). */
+ * "PREFIX~N.EXT" is built (like VFAT short names). UTF-8 server names are
+ * converted to the DOS codepage first, so the local name keeps its letters
+ * (as CP437/850/866 characters) instead of dropping every non-ASCII byte. */
 static void make_local_83(const char *name, const char *localDir, char *out, int outsz)
 {
     char        ext[4];
     const char *dotp;
     long        n;
+    char        cpname[DC_PATHMAX];
+
+    if (cpmap_is_utf8(name)) {
+        cpmap_utf8_to_cp(name, cpname, (int)sizeof(cpname));
+        name = cpname;
+    }
 
     if (is_clean_83(name)) {
         strncpy(out, name, outsz - 1);

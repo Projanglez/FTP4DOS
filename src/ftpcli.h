@@ -127,6 +127,10 @@ private:
     unsigned char pasvAddr[4];      /* parsed from the 227 reply      */
     unsigned      pasvPort;
 
+    /* --- UTF-8 file names (RFC 2640) --- */
+    unsigned char serverUtf8;       /* server announced UTF8 in FEAT   */
+    unsigned char replySawUtf8;     /* a line of the last reply had "UTF8" */
+
     /* --- internal helpers (in ftpcli.cpp) --- */
     int  sendCmd(const char *cmd);                  /* appends CRLF     */
     int  sendCmdArg(const char *cmd, const char *arg);
@@ -139,6 +143,12 @@ private:
     int  simpleCmd(const char *cmd, const char *arg); /* send + reply  */
     void setError(const char *msg);
     void setErrorReply(const char *prefix);
+    /* FEAT probe after login: enables UTF-8 name mode (OPTS UTF8 ON). */
+    void probeUtf8(void);
+    /* Encode a LOCAL-origin name (typed / local panel, DOS codepage) as
+     * UTF-8 for the server if it is in UTF-8 mode. Server-origin wire
+     * names pass through unchanged. Returns 'name' or 'buf'. */
+    const char *encName(const char *name, char *buf, int bufsz);
 };
 
 

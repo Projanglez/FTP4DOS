@@ -17,6 +17,7 @@
 #include <dos.h>
 
 #include "ftpcli.h"
+#include "cpmap.h"
 #include "i18n.h"
 
 /* mTCP (same order as in the reference client) */
@@ -189,6 +190,15 @@ int FtpClient::init_stack(void) {
                                TCP_BUF_MAX, DATA_RECV_SIZE);
     g_fileBufSize = cfgBufSize("FTP4DOS_FILE_BUFFER", "FTP_FILE_BUFFER",
                                FILE_BUF_MAX, FILE_BUF_DEFAULT);
+    {
+        /* Codepage for UTF-8 name conversion: default = active DOS CP
+         * (INT 21h AX=6601h), overridable via FTP4DOS_CODEPAGE. */
+        char tmp[10];
+        unsigned cp = 0;
+        if (Utils::getAppValue((char *)"FTP4DOS_CODEPAGE", tmp, sizeof(tmp)) == 0)
+            cp = (unsigned)atoi(tmp);
+        cpmap_init(cp);
+    }
     Utils::closeCfgFile();
 
     /* File transfer buffer (far heap, not DGROUP). If the configured size
@@ -235,6 +245,8 @@ FtpClient::FtpClient() {
     errmsg[0] = 0;
     pasvAddr[0] = pasvAddr[1] = pasvAddr[2] = pasvAddr[3] = 0;
     pasvPort = 0;
+    serverUtf8 = 0;
+    replySawUtf8 = 0;
 }
 
 void FtpClient::setError(const char *msg) {
@@ -311,6 +323,8 @@ int FtpClient::readReply(void *drainCtxv) {
     clockTicks_t start = TIMER_GET_CURRENT();
     uint8_t ch;
 
+    replySawUtf8 = 0;
+
     for (;;) {
         driveStack();
         if (dc) {
@@ -324,6 +338,9 @@ int FtpClient::readReply(void *drainCtxv) {
             if (ch == '\r') continue;
             if (ch == '\n') {
                 line[len] = 0;
+
+                /* FEAT feature detection (consumed by probeUtf8 only). */
+                if (strstr(line, "UTF8")) replySawUtf8 = 1;
 
                 int haveCode = (len >= 3 &&
                                 isdigit((unsigned char)line[0]) &&
@@ -448,6 +465,39 @@ void FtpClient::closeData(void *dataSock) {
 
 
 /* ===================================================================== */
+/* UTF-8 file names (RFC 2640)                                           */
+/* ===================================================================== */
+
+/* After login: ask the server for its feature list. If it announces UTF8,
+ * request UTF-8 name mode (OPTS UTF8 ON). Servers that list UTF8 usually
+ * send UTF-8 names anyway, so a refused OPTS still counts as UTF-8 mode.
+ * Errors are ignored entirely - this must never break the login. */
+void FtpClient::probeUtf8(void) {
+    serverUtf8 = 0;
+    if (sendCmd("FEAT") != FTP_OK) return;
+    int code = readReply();
+    if (code != 211 || !replySawUtf8) return;
+    if (sendCmdArg("OPTS", "UTF8 ON") == FTP_OK)
+        readReply();                          /* 200/202 or a refusal */
+    serverUtf8 = 1;
+}
+
+/* See ftpcli.h: encode local-origin codepage names as UTF-8 when the server
+ * is in UTF-8 mode. Names that already contain valid UTF-8 sequences are
+ * wire names from the server and pass through unchanged. */
+const char *FtpClient::encName(const char *name, char *buf, int bufsz) {
+    const unsigned char *p;
+    if (!serverUtf8 || !name) return name;
+    for (p = (const unsigned char *)name; *p; p++)
+        if (*p >= 0x80) break;
+    if (*p == 0) return name;                 /* pure ASCII */
+    if (cpmap_is_utf8(name)) return name;     /* already UTF-8 (wire name) */
+    cpmap_cp_to_utf8(name, buf, bufsz);
+    return buf;
+}
+
+
+/* ===================================================================== */
 /* Connect / disconnect                                                  */
 /* ===================================================================== */
 
@@ -512,7 +562,7 @@ int FtpClient::connect(const char *host, unsigned port,
     if (sendCmdArg("USER", (user && user[0]) ? user : "anonymous") != FTP_OK) { disconnect(); return FTP_ERR_PROTO; }
     code = readReply();
     if (code < 0) { disconnect(); return code; }
-    if (code == 230) { state = FTP_IDLE; return FTP_OK; }     /* logged in without a password */
+    if (code == 230) { probeUtf8(); state = FTP_IDLE; return FTP_OK; }  /* logged in without a password */
     if (code != 331) { setErrorReply(L("User rejected", "Benutzer abgelehnt")); disconnect(); return FTP_ERR_AUTH; }
 
     /* --- PASS --- */
@@ -520,7 +570,7 @@ int FtpClient::connect(const char *host, unsigned port,
     if (sendCmdArg("PASS", pass ? pass : "") != FTP_OK) { disconnect(); return FTP_ERR_PROTO; }
     code = readReply();
     if (code < 0) { disconnect(); return code; }
-    if (code == 230 || code == 202) { state = FTP_IDLE; return FTP_OK; }
+    if (code == 230 || code == 202) { probeUtf8(); state = FTP_IDLE; return FTP_OK; }
     if (code == 332) { setError(L("Server requires ACCT (unsupported)", "Server verlangt ACCT (nicht unterst" ue "tzt)")); disconnect(); return FTP_ERR_AUTH; }
 
     setErrorReply(L("Login failed", "Login fehlgeschlagen"));
@@ -548,6 +598,7 @@ void FtpClient::disconnect(void) {
         TcpSocketMgr::freeSocket(s);
         ctrl = 0;
     }
+    serverUtf8 = 0;
     state = FTP_DISCONNECTED;
 }
 
@@ -793,6 +844,10 @@ int FtpClient::stor(const char *localpath, const char *remote,
                     FtpProgressCb cb, void *ctx) {
     if (!is_connected()) { setError(L("Not connected", "Nicht verbunden")); return FTP_ERR_GENERAL; }
 
+    /* Upload target names originate locally (DOS codepage). */
+    char encbuf[FTP_LINE_MAX];
+    remote = encName(remote, encbuf, (int)sizeof(encbuf));
+
     FILE *f = fopen(localpath, "rb");
     if (!f) { setError(L("Cannot read local file", "Lokale Datei nicht lesbar")); return FTP_ERR_LOCALIO; }
 
@@ -888,6 +943,9 @@ int FtpClient::stor(const char *localpath, const char *remote,
 
 int FtpClient::remote_file_exists(const char *path) {
     if (!is_connected()) return 0;
+    /* Called with local-origin names (upload conflict check). */
+    char encbuf[FTP_LINE_MAX];
+    path = encName(path, encbuf, (int)sizeof(encbuf));
     /* TYPE I, so SIZE also works on servers that refuse it in ASCII mode.
      * Errors here are ignored. */
     simpleCmd("TYPE", "I");
@@ -898,6 +956,9 @@ int FtpClient::remote_file_exists(const char *path) {
 
 int FtpClient::make_dir(const char *path) {
     if (!is_connected()) { setError(L("Not connected", "Nicht verbunden")); return FTP_ERR_GENERAL; }
+    /* Directory names are typed by the user (DOS codepage). */
+    char encbuf[FTP_LINE_MAX];
+    path = encName(path, encbuf, (int)sizeof(encbuf));
     int rc = simpleCmd("MKD", path);        /* 257 */
     if (rc == FTP_ERR_SERVER) setErrorReply(L("Make directory failed", "Verzeichnis anlegen fehlgeschlagen"));
     return rc;
@@ -926,7 +987,10 @@ int FtpClient::rename(const char *from, const char *to) {
     if (code < 0) return code;
     if (code != 350) { setErrorReply(L("RNFR failed", "RNFR fehlgeschlagen")); return FTP_ERR_SERVER; }
 
-    rc = sendCmdArg("RNTO", to);
+    /* The new name is typed by the user (DOS codepage); the RNFR name
+     * above is a wire name from the listing and stays untouched. */
+    char encbuf[FTP_LINE_MAX];
+    rc = sendCmdArg("RNTO", encName(to, encbuf, (int)sizeof(encbuf)));
     if (rc != FTP_OK) return rc;
     code = readReply();
     if (code < 0) return code;
