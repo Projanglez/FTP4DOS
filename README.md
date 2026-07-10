@@ -12,27 +12,37 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 
 ## Features
 
-- Two panels: local (DOS) and remote (FTP, passive mode)
-- Navigate directories; view files with F3 (or Enter) — up to 32 KB displayed (remote view downloads temp file first)
-- Edit local text files with F4 — minimal full-screen editor (~32 KB, local only)
-- Compact size display for large files (M/G units); locale-aware number/date/time formatting from the DOS country setting
-- Copy in both directions (F5), including **recursive directory trees**, with live transfer telemetry (current/average speed, per-file and batch ETA)
-- Move (F6) and rename (Alt+F6); **recursive** move/copy/delete for whole directory trees
-- Pause (P) and cancel (ESC) during a running transfer
-- Create directories (F7) and **recursive delete** (F8); Copy/Move/Delete confirm with recursive file/directory counts and total size
+### Panels & navigation
+
+- Two panels, Norton Commander style: local DOS filesystem and remote FTP server (passive mode)
+- Per-panel sorting (Alt+F3: name/extension/size/date/time, asc/desc) and panel swap (Ctrl+U)
+- **Search / jump-to-name** and **full-screen panel toggle** for long remote names
+- **Large remote directories**: 512 entries by default; with **`/EXMEM`** the listing is kept in **XMS/EMS memory** for several thousand files
+
+### File operations
+
+- Copy (F5) and move (F6) in both directions, rename (Alt+F6) — **recursive for whole directory trees**
+- Create directories (F7) and **recursive delete** (F8, confirmations show recursive file/directory counts and total size)
 - Multiple selection with the **Ins key** (Norton style) for copy/move/delete
-- Configurable per-panel sorting (Alt+F3): by name, extension, size, date or time, ascending or descending — remembered across launches
-- Swap the two panels left/right with Ctrl+U (remembered across launches)
-- **Search / jump-to-name** (**Alt+F7** or **Ctrl+F**): jump to the next entry whose name starts with the typed text, wrapping to the top
-- **Full-screen toggle** (**Alt+F8**): give the active panel the full 80-column width so long remote names stay readable
-- **Site manager** — save and load multiple named FTP connection profiles (host, port, user, password, start directory) in `FTP4DOS.SIT`, reached from the **[Manage...]** button in the connect dialog
+- Live transfer telemetry (current/average speed, per-file and batch ETA); pause (P) and cancel (ESC) mid-transfer
+- View files with F3 (up to 32 KB; remote files via temp download); edit local text files with F4 (minimal editor)
 - File checksums (Alt+F9): CRC32 + MD5 for local and remote files, optionally saved to a file
-- **Long remote file names** kept in full (beyond the 8.3 / 40-column display) and used for transfers; **Alt+F2 "Detail"** shows the complete name and size
-- **Long local file names (LFN)** on systems with an LFN API (Windows 9x DOS, MS-DOS 7.x, or [DOSLFN](http://adoxa.altervista.org/doslfn/) on plain DOS): the local panel lists and handles long names natively
-- **UTF-8 remote file names** (RFC 2640): names from modern servers are converted to the active DOS codepage (CP437, CP850/858, CP866) for display and local file names; uploads to servers announcing `UTF8` in FEAT are encoded back to UTF-8. Override the detected codepage with `FTP4DOS_CODEPAGE` in `MTCP.CFG`
+
+### File names & character sets
+
+- **Long remote file names** kept in full beyond the 8.3 / 40-column display and used for transfers; **Alt+F2 "Detail"** shows the complete name and size
+- **Long local file names (LFN)** where an LFN API is available (Windows 9x DOS, MS-DOS 7.x, or [DOSLFN](http://adoxa.altervista.org/doslfn/))
+- **UTF-8 remote file names** (RFC 2640), converted to the active DOS codepage (CP437, CP850/858, CP866) and re-encoded on upload; override with `FTP4DOS_CODEPAGE` in `MTCP.CFG`
+
+### User interface
+
+- Bilingual German/English UI, auto-detected from the DOS country setting (force with `FTP4DOS /L:EN`)
+- Locale-aware number/date/time formatting; compact M/G size display for large files
+
+### More features...
+
+- **Site manager** — any number of named connection profiles (host, port, user, password, start directory) in `FTP4DOS.SIT`, via **[Manage...]** in the connect dialog
 - **Tunable transfer buffers** via `MTCP.CFG` for maximum throughput on your hardware (see [Performance tuning](#performance-tuning))
-- **Large remote directories** — the default listing holds 512 entries (with a popup when there are more); start with **`/EXMEM`** to store the remote list in **extended (XMS) or expanded (EMS) memory** and browse directories with several thousand files
-- Bilingual German/English UI (auto-detected from DOS country setting, or forced on the command line: `FTP4DOS /L:EN`)
 
 ## Build requirements
 
