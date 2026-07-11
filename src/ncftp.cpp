@@ -1,7 +1,7 @@
 /* =============================================================================
  * ncftp.cpp - NCFTP386: Main, screen layout and event loop
  * -----------------------------------------------------------------------------
- * Norton-Commander-style dual-panel file manager: local DOS filesystem on the
+ * Norton-Commander-style dual-pane file manager: local DOS filesystem on the
  * left, FTP remote via mTCP on the right. The main loop works polymorphically
  * over Panel*.
  *
@@ -1692,7 +1692,7 @@ static void do_drives(void)
 /* Brief help (/?) on stdout - runs before tui_init, so plain output. */
 static void print_usage(void)
 {
-    printf("FTP4DOS v" APP_VERSION " - Dual-Panel FTP Client for DOS\n");
+    printf("FTP4DOS v" APP_VERSION " - Dual-Pane FTP Client for DOS\n");
     printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ftp4dos\n\n");
     printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/EXMEM[:XMS|EMS]] [/Q] [/MONO|/COLOR]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
@@ -1989,14 +1989,14 @@ int main(int argc, char *argv[])
              * blank line between the frame and the first content row. */
             dlg_message(L("Help - FTP4DOS v" APP_VERSION, "Hilfe - FTP4DOS v" APP_VERSION),
                 L("\n"
-                  "Tab        Switch active panel\n"
-                  "Ctrl+U     Swap left/right panels\n"
+                  "Tab        Switch active pane\n"
+                  "Ctrl+U     Swap left/right panes\n"
                   "Ctrl+A     File details (= Alt+F2)\n"
                   "Ctrl+F     Search / jump to name (= Alt+F7)\n"
-                  "Ctrl+R     Refresh active panel (= F9)\n"
+                  "Ctrl+R     Refresh active pane (= F9)\n"
                   "Insert     Mark item (copy/move/delete several)\n"
                   "*          Invert selection\n"
-                  "+          Compare panels (= Ctrl+C)\n"
+                  "+          Compare panes (= Ctrl+C)\n"
                   "Enter      Enter directory / view file\n"
                   "Backspace  Parent directory\n"
                   "Arrows/PgUp/PgDn/Home/End  Navigate\n"

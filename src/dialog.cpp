@@ -1244,7 +1244,7 @@ void dlg_splash(const char *version)
 
     SPLASH_LINE(r + 2, titlebuf,
                 ATTR_DIALOG_HL)
-    SPLASH_LINE(r + 3, L("Dual-Panel FTP Client for DOS",
+    SPLASH_LINE(r + 3, L("Dual-Pane FTP Client for DOS",
                           "Dual-Panel FTP Client f" ue "r DOS"),
                 bg)
     SPLASH_LINE(r + 5, "(c) 2026  Projanglez",             bg)
