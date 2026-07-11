@@ -7,10 +7,10 @@ DOS executable plus the exact mTCP sources it links against (GPLv3 §6).
 
 ## v0.9.0 — 2026-06-09 (first public release, as "NCFTP386")
 
-Norton Commander-style dual-panel FTP client for MS-DOS on real x86
+Norton Commander-style dual-pane FTP client for MS-DOS on real x86
 hardware, built with Open Watcom and mTCP.
 
-- Two panels: local (DOS) and remote (FTP, passive mode)
+- Two panes: local (DOS) and remote (FTP, passive mode)
 - Copy in both directions (F5), including recursive directory trees
 - Multiple selection with the Ins key (Norton style) for copy/delete
 - Create (F7), rename (F6), recursive delete with pre-count confirmation (F8)
@@ -30,9 +30,9 @@ hardware, built with Open Watcom and mTCP.
 
 - **Renamed NCFTP386 → FTP4DOS** (thanks to Yoghoo on VOGONS for the
   suggestion)
-- Swap panels with Ctrl+U (remembered across launches)
+- Swap panes with Ctrl+U (remembered across launches)
 - Move with F6 (copy + delete source, recursive); rename moved to Alt+F6
-- FTP panel preserves the server's original (case-sensitive) file names
+- FTP pane preserves the server's original (case-sensitive) file names
 - Monochrome (MDA/Hercules) support; `/MONO` and `/COLOR` overrides
 - ALT command bar (Norton-style): Alt+F1 Drive, Alt+F6 Rename
 - Confirmation dialogs default to Yes
@@ -43,7 +43,7 @@ hardware, built with Open Watcom and mTCP.
 - Pause (P) and cancel (ESC) during transfers
 - Copy/Move/Delete confirmations show recursive counts and total size
 - Alt+F9: file checksums (CRC32 + MD5), local and remote
-- Alt+F3: configurable per-panel sorting
+- Alt+F3: configurable per-pane sorting
 - Compact M/G size display; locale-aware number/date/time formatting
 - Comfortable input fields everywhere (cursor movement, Home/End, Del,
   mid-line insert)
@@ -51,7 +51,7 @@ hardware, built with Open Watcom and mTCP.
 ## v0.9.4a — 2026-06-24
 
 - Alt+F2 "Detail": full (untruncated) name and exact size of an entry
-- Alt+F5 / F9: refresh the active panel
+- Alt+F5 / F9: refresh the active pane
 - No more `..` entry at the FTP root
 - Consistent 1024-based KB/MB/GB sizes throughout
 
@@ -63,7 +63,7 @@ hardware, built with Open Watcom and mTCP.
   extended (XMS) or expanded (EMS) memory instead of the 512-entry default
 - Search / jump-to-name (Alt+F7 / Ctrl+F)
 - **Long remote file names** kept in full and used for transfers
-- Full-screen panel toggle (Alt+F8)
+- Full-screen pane toggle (Alt+F8)
 - FTP start directory (connect dialog and `/D:DIR`); remembered sort order
 - Fix: entering remote directories with names longer than 39 characters
 
@@ -71,7 +71,7 @@ hardware, built with Open Watcom and mTCP.
 
 - Fix: downloading files with multi-dot / long names (e.g. `apack-1.00.zip`)
   maps to a valid DOS 8.3 target instead of failing
-- Ctrl+C as shortcut for "compare panels" (BIOS keyboard read, no more
+- Ctrl+C as shortcut for "compare panes" (BIOS keyboard read, no more
   stray `^C`)
 - Date and Time sorting merged into one Date/Time criterion
 
@@ -87,7 +87,7 @@ Falcosoft, Grzyb and fly_indiz.
 - **UTF-8 file names** (RFC 2640): converted to the active DOS codepage
   (CP437, CP850/858, CP866; `FTP4DOS_CODEPAGE` override) for display and
   local names; uploads to UTF-8 servers are encoded back (`OPTS UTF8 ON`)
-- **Long file names (LFN) in the local panel** on Windows 9x DOS,
+- **Long file names (LFN) in the local pane** on Windows 9x DOS,
   MS-DOS 7.x, or DOSLFN; includes a fix for a false-positive LFN detection
   on MS-DOS 6.22
 - mTCP is now referenced as a **git submodule** of the official repository

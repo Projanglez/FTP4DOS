@@ -1,7 +1,7 @@
 # FTP4DOS
 
-A Norton Commander-style **dual-panel FTP client for MS-DOS** running on any
-x86 machine. The left panel shows the local DOS filesystem; the right panel
+A Norton Commander-style **dual-pane FTP client for MS-DOS** running on any
+x86 machine. The left pane shows the local DOS filesystem; the right pane
 connects to an FTP server via the
 [mTCP](http://www.brutman.com/mTCP/mTCP.html) TCP/IP stack — fully
 keyboard-driven in 80×25 text mode.
@@ -12,11 +12,11 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 
 ## Features
 
-### Panels & navigation
+### Panes & navigation
 
-- Two panels, Norton Commander style: local DOS filesystem and remote FTP server (passive mode)
-- Per-panel sorting (Alt+F3: name/extension/size/date/time, asc/desc) and panel swap (Ctrl+U)
-- **Search / jump-to-name** and **full-screen panel toggle** for long remote names
+- Two panes, Norton Commander style: local DOS filesystem and remote FTP server (passive mode)
+- Per-pane sorting (Alt+F3: name/extension/size/date/time, asc/desc) and pane swap (Ctrl+U)
+- **Search / jump-to-name** and **full-screen pane toggle** for long remote names
 - **Large remote directories**: 512 entries by default; with **`/EXMEM`** the listing is kept in **XMS/EMS memory** for several thousand files
 
 ### File operations
@@ -150,23 +150,23 @@ FTP4DOS_FILE_BUFFER 32768
 
 | Key | Action |
 |-----|--------|
-| Tab | Switch active panel |
-| Ctrl+U | Swap panels left/right (remembered) |
+| Tab | Switch active pane |
+| Ctrl+U | Swap panes left/right (remembered) |
 | Ctrl+A | File details (same as Alt+F2) |
 | Ctrl+F | Search / jump to name (same as Alt+F7) |
-| Ctrl+R | Refresh active panel (same as F9) |
+| Ctrl+R | Refresh active pane (same as F9) |
 | Arrow keys / PgUp PgDn | Move selection |
 | Home / End | Jump to first / last entry |
 | Ins | Mark entry (for multi-file copy/delete) |
 | * (numpad) | Invert selection |
-| + (numpad) | Mark files missing or different in the other panel |
+| + (numpad) | Mark files missing or different in the other pane |
 | Enter | Enter directory / view file (same as F3) |
 | Backspace | Go to parent directory |
 | F1 | Help |
 | F2 | FTP connect / disconnect (with site manager) |
 | Alt+F2 | Detail: full name + size of the selected entry |
 | F3 | View file (local or remote; max 32 KB) |
-| Alt+F3 | Sort the active panel (name/extension/size/date/time, asc/desc) |
+| Alt+F3 | Sort the active pane (name/extension/size/date/time, asc/desc) |
 | F4 | Edit local file (minimal editor, ~32 KB, no undo/search) |
 | F5 | Copy (recursive for directories) |
 | F6 | Move (copy then delete source; recursive) |
@@ -174,8 +174,8 @@ FTP4DOS_FILE_BUFFER 32768
 | F7 | Create directory |
 | Alt+F7 | Search / jump to the next name with a prefix |
 | F8 | Delete (recursive with confirmation) |
-| Alt+F8 | Full-screen the active panel |
-| F9 | Refresh the active panel |
+| Alt+F8 | Full-screen the active pane |
+| F9 | Refresh the active pane |
 | Alt+F1 | Switch local drive |
 | Alt+F9 | Checksum (CRC32 + MD5) of the selected file, optionally saved to a file |
 | F10 | Quit |
