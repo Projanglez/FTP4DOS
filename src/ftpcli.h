@@ -116,6 +116,11 @@ public:
     const char *last_error(void) const { return errmsg; }
     int         last_code(void) const  { return lastCode; }
 
+    /* Set the text returned by last_error(). For callers that detect an
+     * error outside the protocol layer (e.g. dircopy) but report it through
+     * the usual last_error() dialog path. */
+    void set_error(const char *msg);
+
 private:
     FtpState state;
     void    *ctrl;                  /* TcpSocket* (opaque)            */
@@ -141,6 +146,12 @@ private:
     int  openDataConn(void **dataSockOut);          /* PASV + connect   */
     void closeData(void *dataSock);
     int  simpleCmd(const char *cmd, const char *arg); /* send + reply  */
+    /* Discard bytes already buffered on the control connection (before a
+     * new command is sent: anything still unread is a stale reply). */
+    void flushStaleCtrl(void);
+    /* Discard control input until 'quietMs' pass without new data (resync
+     * after ABOR / timeout, where pending reply counts are ambiguous). */
+    void drainReplies(unsigned quietMs);
     void setError(const char *msg);
     void setErrorReply(const char *prefix);
     /* FEAT probe after login: enables UTF-8 name mode (OPTS UTF8 ON). */
