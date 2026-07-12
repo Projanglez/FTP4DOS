@@ -92,7 +92,7 @@ int dlg_checksum(const char *title, const char *crc, const char *md5,
                  char *fnamebuf, int maxlen);
 
 /* Splash screen at program start: centered box with version info.
- * Disappears after ~2 seconds or on a key press. */
+ * Disappears after 10 seconds or on a key press. */
 void dlg_splash(const char *version);
 
 #endif /* DIALOG_H */

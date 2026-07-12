@@ -135,20 +135,28 @@ static int ed_load(const char *path)
     }
     fclose(f);
 
-    /* Split into lines ('\n' separates; a trailing '\r' is discarded). */
+    /* Split into lines ('\n' separates; a trailing '\r' is discarded).
+     * A failing ed_addline MUST fail the whole load: silently keeping a
+     * truncated buffer would let a later F2 save write a truncated file. */
     ls = 0;
     for (pos = 0; pos < n; pos++) {
         if (buf[pos] == '\n') {
             int linelen = (int)(pos - ls);
             if (linelen > 0 && buf[ls + linelen - 1] == '\r') linelen--;
-            if (!ed_addline(buf + ls, linelen)) break;
+            if (!ed_addline(buf + ls, linelen)) {
+                free(buf);
+                return (ed_n >= ED_MAX_LINES) ? -2 : -1;
+            }
             ls = pos + 1;
         }
     }
     if (ls < n || ed_n == 0) {        /* remainder after the last '\n', or an empty file */
         int linelen = (int)(n - ls);
         if (linelen > 0 && buf[ls + linelen - 1] == '\r') linelen--;
-        ed_addline(buf + ls, linelen);
+        if (!ed_addline(buf + ls, linelen)) {
+            free(buf);
+            return (ed_n >= ED_MAX_LINES) ? -2 : -1;
+        }
     }
 
     free(buf);

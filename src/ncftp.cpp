@@ -40,7 +40,7 @@
 #include "lfn.h"
 #include "umlaut.h"   /* always include last */
 
-#define APP_VERSION "0.9.6"
+#define APP_VERSION "1.0.0"
 
 /* ---- Screen layout ---- */
 #define PANEL_TOP     0
@@ -495,6 +495,7 @@ static unsigned long bytes_per_sec(unsigned long bytes, unsigned long ms)
  * the live transfer telemetry shared with the progress dialog. */
 struct CopyCtx {
     int           overwrite_all;
+    int           skipped;          /* an overwrite prompt was answered "Skip" */
     /* batch (all-files) accounting */
     int           batch;            /* 1 => draw the all-files lines           */
     int           files_total;      /* 0 => unknown (directories involved)     */
@@ -654,7 +655,7 @@ static int copy_conflict(void *vctx, const char *name)
 
     r = dlg_overwrite(name);
     if (r == 0) return DC_OVERWRITE;                         /* Overwrite     */
-    if (r == 1) return DC_SKIP;                              /* Skip          */
+    if (r == 1) { if (c) c->skipped = 1; return DC_SKIP; }   /* Skip          */
     if (r == 2) { if (c) c->overwrite_all = 1; return DC_OVERWRITE; }  /* All */
     return DC_ABORT;                                         /* Cancel/Esc    */
 }
@@ -1410,10 +1411,9 @@ static void do_delete(void)
  * F6 - Move (copy to the other panel, then delete the source)
  * Works on a single entry or a multi-selection, files and recursive
  * directories, in both directions. Reuses the copy and delete machinery.
- * A source is deleted only after its copy reported success, so a failed
- * transfer never loses data. (Note: choosing "Skip" on an existing target
- * still counts as success and removes that source - the same trade-off the
- * underlying copy makes.)
+ * A source is deleted only after its copy reported success AND no part of
+ * it was skipped in an overwrite prompt - "Skip" keeps the source, so data
+ * that was not copied is never lost.
  * ---------------------------------------------------------------------- */
 static void do_move(void)
 {
@@ -1481,23 +1481,27 @@ static void do_move(void)
     }
     if (!dlg_confirm(L("Move", "Verschieben"), q)) { redraw_all(); return; }
 
-    cc.overwrite_all = 0;              /* fresh per operation */
+    memset(&cc, 0, sizeof(cc));        /* fresh per operation (no "all" carries over) */
+    cc.batch = 1;
+    if (scan_ok) { cc.files_total = (int)nfiles; cc.batch_total = nbytes; }
 
     redraw_all();
-    dlg_progress_begin(L("Move", "Verschieben"), 0);
+    dlg_progress_begin(L("Move", "Verschieben"), cc.batch);
 
     rc = FTP_OK;
     if (nmarked > 0) {
         for (i = 0; i < g_active->entry_count(); i++) {
             PanelEntry *e = g_active->entry_at(i);
             if (!e || !e->marked || e->is_parent) continue;
+            cc.skipped = 0;
             rc = copy_one_entry(to_remote, e, &cc);
             if (rc != FTP_OK) break;              /* keep source on failure/abort */
-            delete_one_recursive(src_remote, e);  /* copy ok -> remove source      */
+            if (!cc.skipped)                      /* "Skip" keeps the source too   */
+                delete_one_recursive(src_remote, e);
         }
     } else {
         rc = copy_one_entry(to_remote, cur, &cc);
-        if (rc == FTP_OK) delete_one_recursive(src_remote, cur);
+        if (rc == FTP_OK && !cc.skipped) delete_one_recursive(src_remote, cur);
     }
 
     dlg_progress_end();

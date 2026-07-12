@@ -254,6 +254,10 @@ void FtpClient::setError(const char *msg) {
     errmsg[FTP_ERRMSG_MAX - 1] = 0;
 }
 
+void FtpClient::set_error(const char *msg) {
+    setError(msg);
+}
+
 /* errmsg = "<prefix> (<code>) <reply text>", length-limited. */
 void FtpClient::setErrorReply(const char *prefix) {
     sprintf(errmsg, "%.40s (%d) %.100s", prefix, lastCode, replyText);
@@ -287,6 +291,39 @@ int FtpClient::sendRaw(const char *buf, int len) {
     return FTP_OK;
 }
 
+/* Discard any bytes already buffered on the control connection. Called
+ * before sending a new command: at that point the protocol is expected to
+ * be synchronized, so anything still unread is a stale reply left over from
+ * an aborted or timed-out transfer and would shift readReply() off by one
+ * for every following command. */
+void FtpClient::flushStaleCtrl(void) {
+    TcpSocket *s = (TcpSocket *)ctrl;
+    uint8_t tmp[64];
+    if (!s) return;
+    driveStack();
+    while (s->recv(tmp, sizeof(tmp)) > 0)
+        driveStack();
+}
+
+/* Consume and discard control input until 'quietMs' pass without new data.
+ * Used after ABOR / timeout / error paths where the number of outstanding
+ * server replies is ambiguous (e.g. a completion 226 racing our ABOR):
+ * eating everything within the quiet window resynchronizes the control
+ * connection before the next command. */
+void FtpClient::drainReplies(unsigned quietMs) {
+    TcpSocket *s = (TcpSocket *)ctrl;
+    uint8_t tmp[64];
+    if (!s) return;
+    clockTicks_t start = TIMER_GET_CURRENT();
+    while (elapsedMs(start) < (unsigned long)quietMs) {
+        driveStack();
+        int16_t n = s->recv(tmp, sizeof(tmp));
+        if (n > 0) start = TIMER_GET_CURRENT();
+        else if (n < 0) break;
+        if (s->isRemoteClosed() && !s->recvDataWaiting()) break;
+    }
+}
+
 int FtpClient::sendCmd(const char *cmd) {
     char buf[FTP_LINE_MAX];
     int n = (int)strlen(cmd);
@@ -294,16 +331,20 @@ int FtpClient::sendCmd(const char *cmd) {
     memcpy(buf, cmd, n);
     buf[n++] = '\r';
     buf[n++] = '\n';
+    flushStaleCtrl();
     return sendRaw(buf, n);
 }
 
 int FtpClient::sendCmdArg(const char *cmd, const char *arg) {
     char buf[FTP_LINE_MAX];
-    int n = sprintf(buf, "%.8s %.230s", cmd, arg ? arg : "");
+    /* Arg limit: FTP_LINE_MAX minus command (8), space, CRLF and NUL, so
+     * long wire names and deep dircopy paths are never silently cut. */
+    int n = sprintf(buf, "%.8s %.*s", cmd, FTP_LINE_MAX - 12, arg ? arg : "");
     if (n < 0) return FTP_ERR_GENERAL;
     if (n > FTP_LINE_MAX - 3) n = FTP_LINE_MAX - 3;
     buf[n++] = '\r';
     buf[n++] = '\n';
+    flushStaleCtrl();
     return sendRaw(buf, n);
 }
 
@@ -822,13 +863,17 @@ int FtpClient::retr(const char *remote, const char *localpath,
     fclose(f);
     closeData(d);
 
-    if (ioerr == 1) { remove(localpath); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
-    if (ioerr == 2) { setError(L("Download timeout", "Zeit" ue "berschreitung beim Download")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+    /* On the error paths below, a completion reply (226/426) may still be
+     * in flight after closeData(); drainReplies() eats it so the control
+     * connection stays in sync for the next command. */
+    if (ioerr == 1) { remove(localpath); drainReplies(500); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
+    if (ioerr == 2) { drainReplies(500); setError(L("Download timeout", "Zeit" ue "berschreitung beim Download")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
     if (ioerr == 3) {                       /* user abort: drop the partial file */
         remove(localpath);
         sendCmd("ABOR");                    /* tell the server, swallow its reply(s) */
         code = readReply();                 /* 426 (aborted) or 226/225 */
         if (code == 426) readReply();       /* usually followed by 226   */
+        drainReplies(500);                  /* completion may race the ABOR reply */
         state = FTP_IDLE;
         return FTP_ERR_ABORT;
     }
@@ -919,15 +964,20 @@ int FtpClient::stor(const char *localpath, const char *remote,
         closeData(d);                       /* drop our (still-open) data conn */
         code = readReply();                 /* 426 (aborted) or 226/225 */
         if (code == 426) readReply();       /* usually followed by 226   */
+        drainReplies(500);                  /* completion may race the ABOR reply */
         state = FTP_IDLE;
         return FTP_ERR_ABORT;
     }
 
     closeData(d);                           /* blocking: flushes all data + FIN */
 
-    if (ioerr == 1) { setError(L("Local read error", "Lokaler Lesefehler")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
-    if (ioerr == 2) { setError(L("Upload timeout", "Zeit" ue "berschreitung beim Upload")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
-    if (ioerr == 3) { setError(L("Data connection lost", "Datenverbindung verloren")); state = FTP_IDLE; return FTP_ERR_DATACONN; }
+    /* On the error paths below the server still answers the STOR (a 226
+     * after our graceful FIN, or a 4xx/5xx explaining the broken data
+     * connection); drainReplies() eats it so the control connection stays
+     * in sync for the next command. */
+    if (ioerr == 1) { drainReplies(500); setError(L("Local read error", "Lokaler Lesefehler")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
+    if (ioerr == 2) { drainReplies(500); setError(L("Upload timeout", "Zeit" ue "berschreitung beim Upload")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+    if (ioerr == 3) { drainReplies(500); setError(L("Data connection lost", "Datenverbindung verloren")); state = FTP_IDLE; return FTP_ERR_DATACONN; }
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;

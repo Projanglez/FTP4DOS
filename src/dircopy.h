@@ -55,11 +55,14 @@ int dircopy_measure_local (const char *path, unsigned *nfiles, unsigned *ndirs,
 int dircopy_measure_remote(FtpClient *ftp, const char *path,
                            unsigned *nfiles, unsigned *ndirs, unsigned long *bytes);
 
-/* Produce a valid, unique DOS 8.3 local name for a (possibly long or
- * multi-dot) remote name 'name' inside 'localDir'. Clean 8.3 names are kept
- * verbatim; everything else is mangled to a unique VFAT-style "PREFIX~N.EXT".
- * Used for single-file downloads so names like "apack-1.00.zip" map to a
- * legal FAT name (e.g. "APACK-1~1.ZIP") instead of failing fopen(). */
+/* Produce a valid DOS 8.3 local name for a (possibly long or multi-dot)
+ * remote name 'name'. Clean 8.3 names are kept verbatim; everything else is
+ * mangled to a VFAT-style "PREFIX~1.EXT". Deterministic (no probing for a
+ * free ~N): an existing local file goes through the caller's overwrite
+ * prompt instead of silently picking the next free duplicate name. Used for
+ * single-file downloads so names like "apack-1.00.zip" map to a legal FAT
+ * name (e.g. "APACK-1~1.ZIP") instead of failing fopen(). 'localDir' is
+ * unused (kept for API stability). */
 void dircopy_local_83(const char *name, const char *localDir,
                       char *out, int outsz);
 

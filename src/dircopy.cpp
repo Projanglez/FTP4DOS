@@ -20,12 +20,13 @@
 #include <stdlib.h>   /* malloc/free                                       */
 #include <stdio.h>
 #include <ctype.h>    /* toupper                                           */
-#include <io.h>       /* access                                            */
 
 #include "dircopy.h"
 #include "panel.h"     /* PanelEntry, PANEL_NAME_MAX */
 #include "rpanel.h"    /* ftp_parse_list_line        */
 #include "cpmap.h"     /* UTF-8 -> DOS codepage (make_local_83) */
+#include "i18n.h"
+#include "umlaut.h"    /* always the last include */
 
 #define DC_MAXDEPTH    16
 #define DC_PATHMAX     260
@@ -77,13 +78,6 @@ static int local_exists(const char *path)
     FILE *f = fopen(path, "rb");
     if (f) { fclose(f); return 1; }
     return 0;
-}
-
-/* 1 if a local file OR directory with this path exists (used for 8.3 name
- * uniqueness: fopen-based local_exists() can't see directories). */
-static int path_exists(const char *path)
-{
-    return access(path, 0) == 0;
 }
 
 #define DC_AMASK (_A_SUBDIR | _A_HIDDEN | _A_SYSTEM | _A_RDONLY | _A_ARCH)
@@ -156,6 +150,7 @@ struct DcEnt {
     char         *name;
     unsigned char is_dir;
     unsigned long size;        /* file size in bytes (0 for directories) */
+    char          shortn[13];  /* local 8.3 name (assign_short_names)    */
 };
 
 struct DcCollect {
@@ -163,6 +158,7 @@ struct DcCollect {
     int      count;
     int      cap;
     int      curYear;
+    int      overflow;         /* an entry did not fit -> level incomplete */
     char    *pool;             /* full-name pool for this level           */
     unsigned poolUsed;
     unsigned poolSize;
@@ -181,6 +177,7 @@ static int dc_current_year(void)
 static int dc_init(DcCollect *c, int cap)
 {
     c->cap = cap; c->count = 0; c->curYear = dc_current_year();
+    c->overflow = 0;
     c->poolSize = DC_NAMEPOOL; c->poolUsed = 0;
     c->arr  = (DcEnt *)malloc((unsigned)cap * sizeof(DcEnt));
     c->pool = (char  *)malloc(DC_NAMEPOOL);
@@ -193,19 +190,21 @@ static void dc_free(DcCollect *c)
     free(c->arr); free(c->pool); c->arr = 0; c->pool = 0;
 }
 
-/* Append one entry, copying 'name' into the pool. 0 = no room (entry dropped). */
+/* Append one entry, copying 'name' into the pool. 0 = no room (entry dropped,
+ * c->overflow is set: the level MUST then be treated as incomplete). */
 static int dc_add(DcCollect *c, const char *name, unsigned char is_dir, unsigned long size)
 {
     unsigned len = (unsigned)strlen(name) + 1;
     char    *dst;
-    if (c->count >= c->cap) return 0;
-    if (!c->pool || c->poolUsed + len > c->poolSize) return 0;
+    if (c->count >= c->cap) { c->overflow = 1; return 0; }
+    if (!c->pool || c->poolUsed + len > c->poolSize) { c->overflow = 1; return 0; }
     dst = c->pool + c->poolUsed;
     memcpy(dst, name, len);
     c->poolUsed += len;
-    c->arr[c->count].name   = dst;
-    c->arr[c->count].is_dir = is_dir;
-    c->arr[c->count].size   = size;
+    c->arr[c->count].name      = dst;
+    c->arr[c->count].is_dir    = is_dir;
+    c->arr[c->count].size      = size;
+    c->arr[c->count].shortn[0] = '\0';
     c->count++;
     return 1;
 }
@@ -221,11 +220,20 @@ static void dc_on_line(void *vctx, const char *line)
     dc_add(c, full, e.is_dir, e.is_dir ? 0UL : e.size);
 }
 
+/* Error text when a level exceeded DC_LISTCAP / the name pool: download and
+ * measure must fail loudly instead of silently copying a partial tree. */
+static void set_overflow_error(FtpClient *ftp)
+{
+    ftp->set_error(L("Remote directory too large (max. 400 entries per directory)",
+                     "Remote-Verzeichnis zu gro" ss " (max. 400 Eintr" ae "ge pro Verzeichnis)"));
+}
+
 /* Subdirectory names of a level, preserved compactly so the big level buffer
  * can be freed before descending (keeps peak memory low for deep trees). */
 struct DcSubdirs {
-    char  *pool;        /* names concatenated         */
-    char **name;        /* 'count' pointers into pool */
+    char  *pool;        /* names concatenated                         */
+    char **name;        /* 'count' pointers into pool                 */
+    char (*shortn)[13]; /* local 8.3 names, parallel to 'name'        */
     int    count;
 };
 
@@ -233,18 +241,24 @@ static int extract_subdirs(DcCollect *col, DcSubdirs *out)
 {
     int      i;
     unsigned bytes = 0, used = 0;
-    out->pool = 0; out->name = 0; out->count = 0;
+    out->pool = 0; out->name = 0; out->shortn = 0; out->count = 0;
     for (i = 0; i < col->count; i++)
         if (col->arr[i].is_dir) { out->count++; bytes += (unsigned)strlen(col->arr[i].name) + 1; }
     if (out->count <= 0) { out->count = 0; return 0; }
-    out->pool = (char  *)malloc(bytes);
-    out->name = (char **)malloc((unsigned)out->count * sizeof(char *));
-    if (!out->pool || !out->name) { free(out->pool); free(out->name); out->pool = 0; out->name = 0; out->count = 0; return 0; }
+    out->pool   = (char  *)malloc(bytes);
+    out->name   = (char **)malloc((unsigned)out->count * sizeof(char *));
+    out->shortn = (char (*)[13])malloc((unsigned)out->count * 13);
+    if (!out->pool || !out->name || !out->shortn) {
+        free(out->pool); free(out->name); free(out->shortn);
+        out->pool = 0; out->name = 0; out->shortn = 0; out->count = 0;
+        return 0;
+    }
     out->count = 0;
     for (i = 0; i < col->count; i++)
         if (col->arr[i].is_dir) {
             unsigned len = (unsigned)strlen(col->arr[i].name) + 1;
             memcpy(out->pool + used, col->arr[i].name, len);
+            memcpy(out->shortn[out->count], col->arr[i].shortn, 13);
             out->name[out->count++] = out->pool + used;
             used += len;
         }
@@ -253,7 +267,8 @@ static int extract_subdirs(DcCollect *col, DcSubdirs *out)
 
 static void free_subdirs(DcSubdirs *s)
 {
-    free(s->pool); free(s->name); s->pool = 0; s->name = 0; s->count = 0;
+    free(s->pool); free(s->name); free(s->shortn);
+    s->pool = 0; s->name = 0; s->shortn = 0; s->count = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -295,17 +310,41 @@ static int san_copy(char *dst, int pos, int cap, const char *src, int max)
     return pos;
 }
 
-/* Produce a valid, unique 8.3 local name for (possibly long) 'name' in
- * 'localDir'. Clean 8.3 names are used verbatim; otherwise a unique
- * "PREFIX~N.EXT" is built (like VFAT short names). UTF-8 server names are
- * converted to the DOS codepage first, so the local name keeps its letters
- * (as CP437/850/866 characters) instead of dropping every non-ASCII byte. */
-static void make_local_83(const char *name, const char *localDir, char *out, int outsz)
+/* Build the "PREFIX~N.EXT" candidate for (long) 'name' (like VFAT short
+ * names). 'cand' must hold at least 16 bytes. */
+static void mangle_83(const char *name, long n, char *cand)
 {
-    char        ext[4];
+    char        ext[4], base[9], tilde[8];
     const char *dotp;
-    long        n;
-    char        cpname[DC_PATHMAX];
+    int         bcap, blen;
+
+    ext[0] = '\0';
+    dotp = strrchr(name, '.');
+    if (dotp && dotp[1]) ext[san_copy(ext, 0, (int)sizeof(ext), dotp + 1, 3)] = '\0';
+
+    sprintf(tilde, "~%ld", n);
+    bcap = 8 - (int)strlen(tilde);
+    if (bcap < 1) bcap = 1;
+    blen = san_copy(base, 0, (int)sizeof(base), name, bcap);
+    if (blen == 0) base[blen++] = 'X';
+    base[blen] = '\0';
+
+    if (ext[0]) sprintf(cand, "%s%s.%s", base, tilde, ext);
+    else        sprintf(cand, "%s%s", base, tilde);
+}
+
+/* Produce a valid 8.3 local name for (possibly long) 'name'. Clean 8.3
+ * names are used verbatim; otherwise "PREFIX~1.EXT" is built. UTF-8 server
+ * names are converted to the DOS codepage first, so the local name keeps
+ * its letters (as CP437/850/866 characters) instead of dropping every
+ * non-ASCII byte.
+ * Deliberately DETERMINISTIC (no probing for a free ~N): an existing local
+ * file must go through the caller's overwrite prompt, not silently pick the
+ * next free ~N (re-downloads would accumulate duplicates otherwise). */
+static void make_local_83(const char *name, char *out, int outsz)
+{
+    char cpname[DC_PATHMAX];
+    char cand[16];
 
     if (cpmap_is_utf8(name)) {
         cpmap_utf8_to_cp(name, cpname, (int)sizeof(cpname));
@@ -318,28 +357,8 @@ static void make_local_83(const char *name, const char *localDir, char *out, int
         return;
     }
 
-    ext[0] = '\0';
-    dotp = strrchr(name, '.');
-    if (dotp && dotp[1]) ext[san_copy(ext, 0, (int)sizeof(ext), dotp + 1, 3)] = '\0';
-
-    for (n = 1; n < 100000L; n++) {
-        char base[9], tilde[8], cand[16], probe[DC_PATHMAX];
-        int  bcap, blen;
-
-        sprintf(tilde, "~%ld", n);
-        bcap = 8 - (int)strlen(tilde);
-        if (bcap < 1) bcap = 1;
-        blen = san_copy(base, 0, (int)sizeof(base), name, bcap);
-        if (blen == 0) base[blen++] = 'X';
-        base[blen] = '\0';
-
-        if (ext[0]) sprintf(cand, "%s%s.%s", base, tilde, ext);
-        else        sprintf(cand, "%s%s", base, tilde);
-
-        join_local(probe, (int)sizeof(probe), localDir, cand);
-        if (!path_exists(probe)) { strncpy(out, cand, outsz - 1); out[outsz - 1] = '\0'; return; }
-    }
-    strncpy(out, "DC______.TMP", outsz - 1);
+    mangle_83(name, 1L, cand);
+    strncpy(out, cand, outsz - 1);
     out[outsz - 1] = '\0';
 }
 
@@ -348,7 +367,58 @@ static void make_local_83(const char *name, const char *localDir, char *out, int
 void dircopy_local_83(const char *name, const char *localDir,
                       char *out, int outsz)
 {
-    make_local_83(name, localDir, out, outsz);
+    (void)localDir;
+    make_local_83(name, out, outsz);
+}
+
+/* 1 if 'cand' equals a short name already assigned in this level (FAT is
+ * case-insensitive). */
+static int shortn_in_use(DcCollect *c, const char *cand)
+{
+    int i;
+    for (i = 0; i < c->count; i++)
+        if (c->arr[i].shortn[0] && stricmp(c->arr[i].shortn, cand) == 0)
+            return 1;
+    return 0;
+}
+
+/* Assign every entry of a level its local 8.3 name: clean names verbatim,
+ * long names mangled to "PREFIX~N.EXT". Uniqueness is resolved WITHIN the
+ * level only (listing order), NOT against the local filesystem - so a
+ * re-download of the same tree maps to the same names and existing files
+ * go through the normal overwrite prompt instead of silently piling up as
+ * ~2, ~3, ... duplicates. */
+static void assign_short_names(DcCollect *c)
+{
+    int  i;
+    char nm[DC_PATHMAX];
+
+    /* Pass 1: clean 8.3 names keep their spelling (first one wins; a
+     * case-only duplicate falls through to the mangling pass). */
+    for (i = 0; i < c->count; i++) {
+        const char *name = c->arr[i].name;
+        if (cpmap_is_utf8(name)) { cpmap_utf8_to_cp(name, nm, (int)sizeof(nm)); name = nm; }
+        if (is_clean_83(name) && !shortn_in_use(c, name)) {
+            strncpy(c->arr[i].shortn, name, sizeof(c->arr[i].shortn) - 1);
+            c->arr[i].shortn[sizeof(c->arr[i].shortn) - 1] = '\0';
+        }
+    }
+
+    /* Pass 2: mangle the rest, avoiding every name assigned so far. */
+    for (i = 0; i < c->count; i++) {
+        const char *name;
+        char        cand[16];
+        long        n;
+        if (c->arr[i].shortn[0]) continue;
+        name = c->arr[i].name;
+        if (cpmap_is_utf8(name)) { cpmap_utf8_to_cp(name, nm, (int)sizeof(nm)); name = nm; }
+        for (n = 1; n < 100000L; n++) {
+            mangle_83(name, n, cand);
+            if (!shortn_in_use(c, cand)) break;
+        }
+        strncpy(c->arr[i].shortn, cand, sizeof(c->arr[i].shortn) - 1);
+        c->arr[i].shortn[sizeof(c->arr[i].shortn) - 1] = '\0';
+    }
 }
 
 static int download_recurse(FtpClient *ftp, const char *remoteDir,
@@ -371,16 +441,22 @@ static int download_recurse(FtpClient *ftp, const char *remoteDir,
 
     result = ftp->list(remoteDir, dc_on_line, &col);
     if (result != FTP_OK) { dc_free(&col); return result; }
+    if (col.overflow) {                     /* level incomplete -> fail loudly */
+        dc_free(&col);
+        set_overflow_error(ftp);
+        return FTP_ERR_GENERAL;
+    }
+
+    assign_short_names(&col);
 
     /* --- 2) fetch all files first (no recursion, no extra memory). The remote
      *        RETR uses the full name; the local file gets a valid 8.3 name
      *        (long names are mangled to PREFIX~N.EXT). --- */
     for (i = 0; i < col.count; i++) {
-        char childR[DC_PATHMAX], childL[DC_PATHMAX], shortn[PANEL_NAME_MAX];
+        char childR[DC_PATHMAX], childL[DC_PATHMAX];
         if (col.arr[i].is_dir) continue;
         join_remote(childR, (int)sizeof(childR), remoteDir, col.arr[i].name);
-        make_local_83(col.arr[i].name, localDir, shortn, (int)sizeof(shortn));
-        join_local (childL, (int)sizeof(childL), localDir,  shortn);
+        join_local (childL, (int)sizeof(childL), localDir,  col.arr[i].shortn);
 
         if (conflictcb && local_exists(childL)) {
             int d = conflictcb(ctx, col.arr[i].name);
@@ -398,10 +474,9 @@ static int download_recurse(FtpClient *ftp, const char *remoteDir,
 
     /* --- 4) descend into the subdirectories --- */
     for (j = 0; j < nd; j++) {
-        char childR[DC_PATHMAX], childL[DC_PATHMAX], shortn[PANEL_NAME_MAX];
+        char childR[DC_PATHMAX], childL[DC_PATHMAX];
         join_remote(childR, (int)sizeof(childR), remoteDir, subs.name[j]);
-        make_local_83(subs.name[j], localDir, shortn, (int)sizeof(shortn));
-        join_local (childL, (int)sizeof(childL), localDir,  shortn);
+        join_local (childL, (int)sizeof(childL), localDir,  subs.shortn[j]);
         result = download_recurse(ftp, childR, childL, subs.name[j], depth + 1,
                                   itemcb, progcb, conflictcb, ctx);
         if (result != FTP_OK) break;
@@ -477,6 +552,11 @@ static int measure_remote_recurse(FtpClient *ftp, const char *dir,
 
     rc = ftp->list(dir, dc_on_line, &col);
     if (rc != FTP_OK) { dc_free(&col); return rc; }
+    if (col.overflow) {                     /* count would be wrong -> fail */
+        dc_free(&col);
+        set_overflow_error(ftp);
+        return FTP_ERR_GENERAL;
+    }
 
     for (i = 0; i < col.count; i++) {
         if (col.arr[i].is_dir) (*nd)++;

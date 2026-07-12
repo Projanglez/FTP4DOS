@@ -188,8 +188,8 @@ src\i18n.obj: src\i18n.cpp src\i18n.h
 # return address -> a hard hang in interrupt context on the FIRST received
 # packet (Ctrl+Alt+Del dead). Verified via wdis disassembly. The mTCP
 # reference (APPS/FTP/MAKEFILE) also builds with -0. 8086 code runs fine
-# on the 386; only our own app code uses -3. (ipasm.asm: already wasm -0,
-# see below.)
+# on the 386; the application code is built with -0 as well (see CFLAGS).
+# (ipasm.asm: already wasm -0, see below.)
 MCFLAGS = -ml -0 -zu -s -ox -bt=dos -zp1 -ei
 MFLAGS  = $(MCFLAGS) -DCFG_H="ncftp.cfg" -I./mtcp/src/TCPLIB $(INCPATH)
 
