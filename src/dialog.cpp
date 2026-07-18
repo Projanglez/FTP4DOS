@@ -1058,7 +1058,8 @@ int dlg_connect(const char *title,
                 char *pass, int pass_max,
                 char *startdir, int startdir_max,
                 int *save_conn,
-                int *save_pass)
+                int *save_pass,
+                int sites_first)
 {
     int cols   = 50;
     int rows   = 12;
@@ -1129,7 +1130,20 @@ int dlg_connect(const char *title,
     draw_hsep(top + 6, left, cols, bg, 1);
     draw_hsep(top + 9, left, cols, bg, 1);
 
-    for (;;) {
+    /* /SITES startup switch: open the site manager right away, as if the
+     * user had pressed the Manage... button. "Connect now" from a profile
+     * skips the form entirely. */
+    if (sites_first) {
+        int rc = dlg_sites(host, host_max, port, port_max,
+                           user, user_max, pass, pass_max,
+                           startdir, startdir_max, &chk_pass);
+        for (i = 0; i < 5; i++)
+            editfield_init(&efs[i], fbufs[i], fmaxs[i]);
+        if (rc == 1)      result = 1;           /* connect now       */
+        else if (rc == 2) focus  = 3;           /* type the password */
+    }
+
+    while (!result) {
         int k;
         char tmp[56];
 

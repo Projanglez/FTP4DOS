@@ -93,6 +93,32 @@ Falcosoft, Grzyb and fly_indiz.
 - mTCP is now referenced as a **git submodule** of the official repository
   <https://github.com/mbbrutman/mTCP>, pinned to the 2025-01-10 release tag
 
-## v1.0 — upcoming
+## v1.0.0 — 2026-07-18
 
-The first stable release. Final scope to be determined.
+The first stable release, verified on real 386 hardware. Driven by the
+v0.9.6 feedback round on VOGONS — thanks to fly_indiz and ntalaec.
+
+- **Steadier download speeds**: disk writes no longer starve the network
+  stack — the file buffer is flushed in slices with packet processing in
+  between, avoiding the burst/stall sawtooth seen on real hardware
+- **Cancelling a transfer is instant** instead of freezing the progress
+  dialog for up to 10 seconds (ABOR is now sent while the data connection
+  is still open, mirroring the upload path)
+- **Control-connection resync**: stale replies left over from aborted or
+  timed-out transfers no longer desync later commands (the reported
+  "PASV refused (257)"); a server-side idle timeout (421) now cleanly
+  reports "connection lost" instead of failing later
+- **Long filenames actually work now** (the v0.9.6 LFN support was only
+  ever exercised on plain DOS): detection uses the documented Get Volume
+  Information call instead of the undocumented probe that only Windows 9x
+  answers (fixes DOSLFN on MS-DOS 7.x), the 714Eh find-data record layout
+  and attribute mask were wrong (garbage names, missing directories), and
+  all file operations route through the LFN API or the 8.3 alias — enter
+  long-named directories, view/copy/delete/rename long-named files,
+  download to long names, create long-named directories
+- **UTF-8 remote paths** are codepage-converted in the pane header (file
+  lists already were); cursor reselection after leaving a UTF-8-named
+  directory works
+- **`/SITES` switch**: open the site manager directly on startup
+- Deterministic 8.3 download names, Move+Skip no longer loses files,
+  overflow guard for >4 GB counters

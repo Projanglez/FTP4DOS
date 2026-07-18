@@ -47,7 +47,11 @@ private:
     int nc_case() const { return 0; }
 
     FtpClient *ftp;
-    char cwd[PANEL_HEADER_MAX];  /* current remote path (via PWD)              */
+    /* Full remote path (via PWD), NOT truncated to the header display width -
+     * deeply nested trees with long directory names easily exceed
+     * PANEL_HEADER_MAX (80). Sized like FTP_LINE_MAX since that is the largest
+     * a PWD reply (and thus the quoted path) can be. */
+    char cwd[FTP_LINE_MAX];
     int  navFailed;             /* 1 = the last action reported an error       */
     int  curYear;               /* current year (for date lines with a time)  */
 

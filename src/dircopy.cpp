@@ -25,6 +25,7 @@
 #include "panel.h"     /* PanelEntry, PANEL_NAME_MAX */
 #include "rpanel.h"    /* ftp_parse_list_line        */
 #include "cpmap.h"     /* UTF-8 -> DOS codepage (make_local_83) */
+#include "lfn.h"       /* lfn_normalize_path, lfn_mkdir */
 #include "i18n.h"
 #include "umlaut.h"    /* always the last include */
 
@@ -36,7 +37,9 @@
 /* Path helpers                                                        */
 /* ------------------------------------------------------------------ */
 
-/* "dir\name" (local, backslash). Watch the "C:\" root, length-safe. */
+/* "dir\name" (local, backslash). Watch the "C:\" root, length-safe.
+ * On LFN systems the result is normalized to its 8.3 alias so the SFN-only
+ * C library calls (fopen, remove, _dos_findfirst, ...) keep working. */
 static void join_local(char *out, int outsz, const char *dir, const char *name)
 {
     int n;
@@ -49,6 +52,7 @@ static void join_local(char *out, int outsz, const char *dir, const char *name)
         out[n] = '\0';
     }
     strncat(out, name, outsz - 1 - (int)strlen(out));
+    lfn_normalize_path(out, outsz);
 }
 
 /* "dir/name" (remote, slash). Watch the "/" root, length-safe. */
@@ -432,9 +436,10 @@ static int download_recurse(FtpClient *ftp, const char *remoteDir,
 
     if (depth > DC_MAXDEPTH) return FTP_ERR_GENERAL;
 
-    /* Create the local target directory (ignore if it already exists). */
+    /* Create the local target directory (ignore if it already exists).
+     * lfn_mkdir: the leaf may be a long name on LFN systems. */
     if (itemcb) itemcb(ctx, leaf, 1);
-    _mkdir(localDir);
+    lfn_mkdir(localDir);
 
     /* --- 1) read in the entire level --- */
     if (!dc_init(&col, DC_LISTCAP)) return FTP_ERR_LOCALIO;
