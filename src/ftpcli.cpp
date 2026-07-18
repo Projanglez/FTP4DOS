@@ -18,6 +18,7 @@
 
 #include "ftpcli.h"
 #include "cpmap.h"
+#include "lfn.h"      /* lfn_fopen/lfn_remove: local names may be long */
 #include "i18n.h"
 
 /* mTCP (same order as in the reference client) */
@@ -91,6 +92,30 @@ struct XferBuf {
     uint16_t  used;     /* accumulated bytes not yet written  */
 };
 
+/* Write the accumulated buffer to disk in slices, driving the TCP stack
+ * between the slices. During one big blocking fwrite (up to 32 KB) nothing
+ * services the packet driver: incoming frames overflow its ring, segments
+ * are lost and the server backs off into retransmission timeouts - the
+ * burst/stall sawtooth observed on real hardware. Slicing keeps ACKs and
+ * window updates flowing while the disk works; 4 KB per slice keeps the
+ * large-block write advantage (see FILE_BUF_* above).
+ * Returns 0 on success, -1 on write error. */
+#define DISK_SLICE 4096u
+
+static int flushXferBuf(XferBuf *xb, FILE *f) {
+    uint16_t off = 0;
+    while (off < xb->used) {
+        uint16_t n = (uint16_t)(xb->used - off);
+        if (n > DISK_SLICE) n = DISK_SLICE;
+        if (fwrite(xb->buf + off, 1, (size_t)n, f) != (size_t)n)
+            return -1;
+        off += n;
+        driveStack();
+    }
+    xb->used = 0;
+    return 0;
+}
+
 /* Drain the data connection 'ds' as far as possible (RETR download).
  * This keeps the receive window open; otherwise it drops below one MSS or to
  * zero, the server stalls (Silly Window Syndrome) and sends nothing further
@@ -101,10 +126,10 @@ struct XferBuf {
  * TCPINC/TCP.H) - there is no 5s timer in mTCP. Behavior verified against
  * mTCP 2025-01-10.
  * Received data is accumulated in xb and only written to 'f' once the
- * buffer is full: one large write instead of many per-MSS writes (the
+ * buffer is full: large writes instead of many per-MSS writes (the
  * latter is the difference between 10 KB/s and full speed on machines
- * with slow disk I/O). recv() itself still empties the TCP buffer on
- * every pass, so the window stays open regardless of the write bundling.
+ * with slow disk I/O); flushXferBuf() services the stack between the
+ * write slices so the flush itself doesn't starve the packet driver.
  * Returns: >0 bytes received (added to *total), 0 nothing available,
  * -1 write error, -2 connection closed. */
 static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
@@ -113,9 +138,8 @@ static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
     int got = 0;
     for (;;) {
         if (xb->used == xb->size) {
-            if (fwrite(xb->buf, 1, (size_t)xb->size, f) != (size_t)xb->size)
+            if (flushXferBuf(xb, f) != 0)
                 return -1;
-            xb->used = 0;
         }
         n = ds->recv(xb->buf + xb->used, (uint16_t)(xb->size - xb->used));
         if (n <= 0) break;
@@ -125,17 +149,6 @@ static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
     }
     if (n < 0) return -2;
     return got;
-}
-
-/* Write out whatever is still accumulated in xb (end of transfer).
- * Returns 0 on success, -1 on write error. */
-static int flushXferBuf(XferBuf *xb, FILE *f) {
-    if (xb->used) {
-        if (fwrite(xb->buf, 1, (size_t)xb->used, f) != (size_t)xb->used)
-            return -1;
-        xb->used = 0;
-    }
-    return 0;
 }
 
 /* Context for draining the data connection WHILE readReply() is waiting for
@@ -653,6 +666,11 @@ int FtpClient::noop(void) {
     if (sendCmd("NOOP") != FTP_OK) { disconnect(); return FTP_ERR_PROTO; }
     int code = readReply();
     if (code < 0) { disconnect(); return code; }   /* connection lost */
+    if (code == 421) {                              /* service closing (idle timeout) */
+        setError(L("Server closed the connection", "Server hat die Verbindung geschlossen"));
+        disconnect();
+        return FTP_ERR_PROTO;
+    }
     return FTP_OK;                                  /* 200 expected, otherwise doesn't matter */
 }
 
@@ -807,7 +825,7 @@ int FtpClient::retr(const char *remote, const char *localpath,
     rc = openDataConn(&d);
     if (rc != FTP_OK) { state = FTP_IDLE; return rc; }
 
-    FILE *f = fopen(localpath, "wb");
+    FILE *f = lfn_fopen(localpath, "wb");   /* target name may be long (LFN) */
     if (!f) { closeData(d); state = FTP_IDLE; setError(L("Cannot create local file", "Lokale Datei nicht anlegbar")); return FTP_ERR_LOCALIO; }
 
     TcpSocket *ds = (TcpSocket *)d;
@@ -818,7 +836,7 @@ int FtpClient::retr(const char *remote, const char *localpath,
     int code;
 
     rc = sendCmdArg("RETR", remote);
-    if (rc != FTP_OK) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return rc; }
+    if (rc != FTP_OK) { fclose(f); lfn_remove(localpath); closeData(d); state = FTP_IDLE; return rc; }
 
     /* Read "150/125" WHILE already draining the data connection: otherwise
      * the server fills the receive buffer during this wait, the window
@@ -830,9 +848,9 @@ int FtpClient::retr(const char *remote, const char *localpath,
         dc.total = &total; dc.err = 0;
         code = readReply(&dc);               /* 150 / 125 */
         if (dc.err) ioerr = 1;
-        if (code < 0) { fclose(f); remove(localpath); closeData(d); state = FTP_IDLE; return code; }
+        if (code < 0) { fclose(f); lfn_remove(localpath); closeData(d); state = FTP_IDLE; return code; }
         if (code != 150 && code != 125) {
-            fclose(f); remove(localpath); closeData(d); state = FTP_IDLE;
+            fclose(f); lfn_remove(localpath); closeData(d); state = FTP_IDLE;
             setErrorReply(L("RETR refused", "RETR abgelehnt"));
             return (code >= 400) ? FTP_ERR_SERVER : FTP_ERR_PROTO;
         }
@@ -861,22 +879,42 @@ int FtpClient::retr(const char *remote, const char *localpath,
     if (ioerr != 3 && flushXferBuf(&xb, f) != 0) ioerr = 1;
 
     fclose(f);
+
+    if (ioerr == 3) {                       /* user abort: drop the partial file */
+        lfn_remove(localpath);
+        /* ABOR while the data connection is still open (mirrors stor()):
+         * closing first sends a graceful FIN that cannot complete while the
+         * server is still streaming, so the blocking close() spins for the
+         * full TCP_CLOSE_TIMEOUT (10 s) with the progress dialog frozen on
+         * screen. With ABOR first the server aborts deterministically
+         * (426 transfer aborted, then 226 ABOR ok). */
+        sendCmd("ABOR");
+        /* Discard the in-flight data so the server can flush its pipeline
+         * and close its side (a FIN needs send window too); closeData()
+         * below then completes immediately instead of hitting the timeout. */
+        {
+            clockTicks_t t0 = TIMER_GET_CURRENT();
+            while (elapsedMs(t0) < 3000ul) {
+                driveStack();
+                if (ds->recv(g_fileBuf, g_fileBufSize) < 0) break;
+                if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
+            }
+        }
+        code = readReply();                 /* 426 (aborted) or 226/225 */
+        if (code == 426) readReply();       /* usually followed by 226   */
+        drainReplies(500);                  /* completion may race the ABOR reply */
+        closeData(d);
+        state = FTP_IDLE;
+        return FTP_ERR_ABORT;
+    }
+
     closeData(d);
 
     /* On the error paths below, a completion reply (226/426) may still be
      * in flight after closeData(); drainReplies() eats it so the control
      * connection stays in sync for the next command. */
-    if (ioerr == 1) { remove(localpath); drainReplies(500); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
+    if (ioerr == 1) { lfn_remove(localpath); drainReplies(500); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
     if (ioerr == 2) { drainReplies(500); setError(L("Download timeout", "Zeit" ue "berschreitung beim Download")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
-    if (ioerr == 3) {                       /* user abort: drop the partial file */
-        remove(localpath);
-        sendCmd("ABOR");                    /* tell the server, swallow its reply(s) */
-        code = readReply();                 /* 426 (aborted) or 226/225 */
-        if (code == 426) readReply();       /* usually followed by 226   */
-        drainReplies(500);                  /* completion may race the ABOR reply */
-        state = FTP_IDLE;
-        return FTP_ERR_ABORT;
-    }
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;

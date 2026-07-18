@@ -73,6 +73,8 @@ int dlg_choice(const char *title, const char *msg,
  * Host/Port/User/Pass fields + two "save" checkboxes.
  * Tab/Down/Up navigate between fields; Space/Enter toggles checkboxes.
  * *save_conn and *save_pass are used in/out (pre-filled from NCFTP.SAV).
+ * sites_first != 0 opens the site manager immediately (/SITES switch), as
+ * if the Manage... button had been pressed.
  * Returns: 1 = Connect, 0 = Cancel. On 0, *save_conn/*save_pass are left
  * unchanged. */
 int dlg_connect(const char *title,
@@ -82,7 +84,8 @@ int dlg_connect(const char *title,
                 char *pass, int pass_max,
                 char *startdir, int startdir_max,
                 int *save_conn,
-                int *save_pass);
+                int *save_pass,
+                int sites_first);
 
 /* Show CRC32 + MD5 of a file and offer to save them to a file.
  * crc / md5 are the formatted hex strings (display only). fnamebuf (size

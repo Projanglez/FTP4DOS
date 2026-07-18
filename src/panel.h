@@ -21,6 +21,11 @@
 #define PANEL_NAME_MAX    40   /* holds local 8.3 AND longer FTP names        */
 #define PANEL_MAX_ENTRIES 512  /* fixed conventional buffer (default storage) */
 #define PANEL_HEADER_MAX  80   /* path/title line (DOS path max. ~64+drive)   */
+/* Scratch buffer for the display name in format_entry(). Must fit the
+ * widest possible name column: SCREEN_COLS (80) minus border/size/date
+ * columns, so the full (untruncated, pool-backed) name can be shown in
+ * full-screen (Alt+F8) mode instead of being cut off at PANEL_NAME_MAX. */
+#define PANEL_DISPNAME_MAX 64
 
 /* A directory entry (POD - re-sortable via qsort). */
 struct PanelEntry {

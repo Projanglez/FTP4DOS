@@ -73,6 +73,7 @@ static char g_pass[40]           = "";
 static int  g_savepw      = 1;   /* remember password (0 = host/user only)     */
 static int  g_saveconn    = 1;   /* 0 = do not save this session in NCFTP.SAV  */
 static int  g_autoconnect = 0;   /* auto-connect via command line (-h)         */
+static int  g_start_sites = 0;   /* /SITES: open the site manager on startup   */
 static int  g_nosplash    = 0;   /* /Q: skip splash screen                     */
 static int  g_swapped     = 0;   /* Ctrl-U: local panel on the right (saved)   */
 static int  g_fullscreen  = 0;   /* Alt+F8: active panel spans the full width   */
@@ -415,7 +416,7 @@ static int perform_connect(void)
     return FTP_OK;
 }
 
-static void do_connect(void)
+static void do_connect(int sites_first)
 {
     if (!g_ftp_ready) {
         dlg_error(L("FTP unavailable", "FTP nicht verf" ue "gbar"),
@@ -445,7 +446,7 @@ static void do_connect(void)
                      g_user,    (int)sizeof(g_user) - 1,
                      g_pass,    (int)sizeof(g_pass) - 1,
                      g_ui.startdir, (int)sizeof(g_ui.startdir) - 1,
-                     &g_saveconn, &g_savepw))
+                     &g_saveconn, &g_savepw, sites_first))
     { redraw_all(); return; }
     if (g_host[0] == '\0') { redraw_all(); return; }
 
@@ -668,7 +669,9 @@ static int local_exists(const char *path)
     return 0;
 }
 
-/* Build local path "dir\name" (respecting root "C:\"), length-safe. */
+/* Build local path "dir\name" (respecting root "C:\"), length-safe.
+ * On LFN systems the result is normalized to its 8.3 alias so the SFN-only
+ * C library calls (fopen, remove, _rmdir, ...) keep working. */
 static void join_local(char *out, int outsz, const char *dir, const char *name)
 {
     int n;
@@ -681,6 +684,7 @@ static void join_local(char *out, int outsz, const char *dir, const char *name)
         out[n] = '\0';
     }
     strncat(out, name, outsz - 1 - (int)strlen(out));
+    lfn_normalize_path(out, outsz);
 }
 
 /* Copy a single file interactively (target name editable, overwrite prompt).
@@ -728,8 +732,9 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
     } else {
         /* --- Upload: local -> remote --- */
         char localpath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-        join_local(localpath, (int)sizeof(localpath), g_left.path(), e->name);
-        strncpy(target, e->name, sizeof(target) - 1);
+        /* entry_name(): the display name may be truncated for long LFNs. */
+        join_local(localpath, (int)sizeof(localpath), g_left.path(), entry_name(e));
+        strncpy(target, entry_name(e), sizeof(target) - 1);
         target[sizeof(target) - 1] = '\0';
         sprintf(prompt, L("Upload \"%.20s\" as:", "\"%.20s\" senden als:"), e->name);
         if (!dlg_input(L("Upload", "Upload"), prompt, target, (int)sizeof(target) - 1, 0)) { redraw_all(); return; }
@@ -1055,7 +1060,7 @@ static void do_checksum(void)
         char savepath[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
         FILE *f;
         join_local(savepath, (int)sizeof(savepath), g_left.path(), fname);
-        f = fopen(savepath, "w");
+        f = lfn_fopen(savepath, "w");   /* .CHK name may be long on LFN systems */
         if (f == 0) {
             dlg_error(L("Checksum", "Pr" ue "fsumme"),
                       L("Could not write the file.",
@@ -1254,7 +1259,7 @@ static void do_mkdir(void)
     } else {
         char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
         join_local(path, (int)sizeof(path), g_left.path(), name);
-        if (_mkdir(path) != 0)
+        if (lfn_mkdir(path) != 0)   /* the typed name may be a long name */
             dlg_error(L("Make Directory", "Verzeichnis erstellen"),
                       L("Could not create directory.", "Konnte Verzeichnis nicht anlegen."));
         else
@@ -1557,7 +1562,7 @@ static void do_rename(void)
         char newpath[PANEL_HEADER_MAX + 260 + 4];
         join_local(oldpath, (int)sizeof(oldpath), g_left.path(), entry_name(e));
         join_local(newpath, (int)sizeof(newpath), g_left.path(), newname);
-        if (rename(oldpath, newpath) != 0)
+        if (lfn_rename(oldpath, newpath) != 0)   /* the new name may be long */
             dlg_error(L("Rename failed", "Umbenennen fehlgeschlagen"),
                       L("Could not rename.\nName invalid or already exists.",
                         "Konnte nicht umbenennen.\nName ung" ue "ltig oder existiert bereits."));
@@ -1698,7 +1703,7 @@ static void print_usage(void)
 {
     printf("FTP4DOS v" APP_VERSION " - Dual-Pane FTP Client for DOS\n");
     printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ftp4dos\n\n");
-    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/EXMEM[:XMS|EMS]] [/Q] [/MONO|/COLOR]\n");
+    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]] [/Q] [/MONO|/COLOR]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
     printf("  /H:HOST         connect to HOST automatically on startup\n");
@@ -1709,6 +1714,7 @@ static void print_usage(void)
     printf("  /S:ALL          save connection incl. password to FTP4DOS.SAV (default)\n");
     printf("  /S:NOPASS       save connection but not the password\n");
     printf("  /S:OFF          do not save this connection\n");
+    printf("  /SITES          open the site manager on startup\n");
     printf("  /EXMEM          list very large remote dirs via extended/expanded\n");
     printf("                  memory (auto: XMS then EMS; force with /EXMEM:XMS or :EMS)\n");
     printf("  /Q              skip splash screen\n");
@@ -1777,7 +1783,10 @@ int main(int argc, char *argv[])
                 g_ui.startdir[sizeof(g_ui.startdir) - 1] = 0;
                 break;
             case 's':
-                if      (stricmp(val, "OFF")    == 0) g_saveconn = 0;
+                if (strnicmp(o, "sites", 5) == 0 && o[5] == '\0') {
+                    g_start_sites = 1;      /* /SITES: site manager on startup */
+                }
+                else if (stricmp(val, "OFF")    == 0) g_saveconn = 0;
                 else if (stricmp(val, "NOPASS") == 0) { g_saveconn = 1; g_savepw = 0; }
                 else if (stricmp(val, "ALL")    == 0) { g_saveconn = 1; g_savepw = 1; }
                 break;
@@ -1868,7 +1877,12 @@ int main(int argc, char *argv[])
      * and the link is still cold - so let the stack warm up briefly before
      * the first connection attempt. perform_connect() itself handles the
      * transient retry (so this also applies to F2). */
-    if (g_autoconnect) {
+    if (g_start_sites) {
+        /* /SITES: open the site manager (via the connect dialog) right away.
+         * Takes precedence over /H auto-connect - both ask for a connection,
+         * but /SITES is the explicitly interactive one. */
+        do_connect(1);
+    } else if (g_autoconnect) {
         if (g_ftp_ready) {
             FtpClient::stack_poll(750);            /* let the driver/link settle */
             if (perform_connect() != FTP_OK)
@@ -2021,7 +2035,7 @@ int main(int argc, char *argv[])
                   "\n"
                   "F1-F10     Befehle in der Tastenleiste (Alt halten f" ue "r Alternativen)"), 0);
             break;
-        case KEY_F2:  do_connect(); break;
+        case KEY_F2:  do_connect(0); break;
         case KEY_F3:  do_view(); break;
         case KEY_F4:  do_edit(); break;
         case KEY_F5:  do_copy(); break;

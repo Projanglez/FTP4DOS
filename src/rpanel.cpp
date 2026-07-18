@@ -364,11 +364,21 @@ int RemotePanel::refresh()
     }
     poolUsed = 0;
 
-    /* Determine the current path (for the header). */
-    if (ftp->get_cwd(cwd, PANEL_HEADER_MAX) != FTP_OK) {
+    /* Determine the current path (for the header). cwd keeps the raw wire
+     * bytes (it is used as remote destination path, see Panel::path()); a
+     * UTF-8 path is codepage-converted for the header display only. */
+    if (ftp->get_cwd(cwd, sizeof(cwd)) != FTP_OK) {
         strcpy(cwd, "/");
     }
-    sprintf(header, "%.30s:%.46s", ftp->host_name(), cwd);
+    {
+        char disp[PANEL_HEADER_MAX];
+        const char *p = cwd;
+        if (cpmap_is_utf8(cwd)) {
+            cpmap_utf8_to_cp(cwd, disp, (int)sizeof(disp));
+            p = disp;
+        }
+        sprintf(header, "%.30s:%.46s", ftp->host_name(), p);
+    }
 
     curYear = current_year();
 
@@ -406,9 +416,14 @@ int RemotePanel::enter_selected()
 
     int rc;
     if (e->is_parent) {
-        /* Going up: afterwards put the cursor on the directory we left. */
-        char leaf[PANEL_NAME_MAX];
-        path_leaf(cwd, leaf, sizeof(leaf));
+        /* Going up: afterwards put the cursor on the directory we left.
+         * The display names are codepage-converted, so convert the leaf of
+         * a UTF-8 path the same way before matching. */
+        char leaf[FTP_LINE_MAX];    /* as large as cwd so long leaves reselect */
+        char raw[FTP_LINE_MAX];
+        path_leaf(cwd, raw, sizeof(raw));
+        if (cpmap_is_utf8(raw)) cpmap_utf8_to_cp(raw, leaf, sizeof(leaf));
+        else                    strcpy(leaf, raw);
         rc = ftp->parent_dir();
         if (rc == FTP_OK) { refresh(); select_by_name(leaf); }
     } else {
@@ -424,9 +439,12 @@ int RemotePanel::enter_selected()
 
 void RemotePanel::go_parent()
 {
-    char leaf[PANEL_NAME_MAX];
+    char leaf[FTP_LINE_MAX];    /* as large as cwd so long leaves reselect */
+    char raw[FTP_LINE_MAX];
     if (!ftp || !ftp->is_connected()) return;
-    path_leaf(cwd, leaf, sizeof(leaf));
+    path_leaf(cwd, raw, sizeof(raw));
+    if (cpmap_is_utf8(raw)) cpmap_utf8_to_cp(raw, leaf, sizeof(leaf));
+    else                    strcpy(leaf, raw);
     int rc = ftp->parent_dir();
     if (rc == FTP_OK) { refresh(); select_by_name(leaf); }
     else              navFailed = 1;

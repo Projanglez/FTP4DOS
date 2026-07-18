@@ -167,14 +167,15 @@ int LocalPanel::enter_selected()
     if (!e->is_dir) return 0;
 
     if (e->is_parent) {
-        char leaf[PANEL_NAME_MAX];
+        char leaf[260];         /* full LFN size so long leaves reselect */
         path_leaf(cwd, leaf, sizeof(leaf));
-        chdir("..");
+        lfn_chdir("..");
         refresh();
         select_by_name(leaf);
     } else {
-        /* Use entry_name() so LFN directory names > 39 chars work. */
-        chdir(entry_name(e));
+        /* lfn_chdir (713Bh): plain chdir (3Bh) stays 8.3-only even with an
+         * LFN provider loaded; entry_name() is the long directory name. */
+        lfn_chdir(entry_name(e));
         refresh();
     }
     return 1;
@@ -184,9 +185,9 @@ int LocalPanel::enter_selected()
  * Afterwards the cursor sits on the directory just left. */
 void LocalPanel::go_parent()
 {
-    char leaf[PANEL_NAME_MAX];
+    char leaf[260];             /* full LFN size so long leaves reselect */
     path_leaf(cwd, leaf, sizeof(leaf));
-    chdir("..");
+    lfn_chdir("..");
     refresh();
     select_by_name(leaf);
 }

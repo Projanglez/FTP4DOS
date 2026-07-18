@@ -19,6 +19,7 @@
 #include "panel.h"
 #include "tui.h"
 #include "i18n.h"
+#include "cpmap.h"
 #include "umlaut.h"   /* always include last */
 
 /* -------------------------------------------------------------------------
@@ -224,7 +225,12 @@ void Panel::select_by_name(const char *name)
     int i;
     if (name && name[0]) {
         for (i = 0; i < count; i++) {
-            if (stricmp(store->peek(i)->name, name) == 0) {
+            /* Match the truncated display name AND the full (pool) name, so
+             * callers may pass either form for entries longer than the
+             * display column (e.g. go_parent with a long directory leaf). */
+            const PanelEntry *pe = store->peek(i);
+            if (stricmp(pe->name, name) == 0 ||
+                (pe->fullname && stricmp(pe->fullname, name) == 0)) {
                 cursor = i;
                 clamp_scroll();
                 return;
@@ -366,7 +372,9 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
     ColLayout c;
     int i;
     char tmp[16];
-    char dispname[PANEL_NAME_MAX];
+    char dispname[PANEL_DISPNAME_MAX];
+    char convbuf[PANEL_DISPNAME_MAX];
+    const char *src;
 
     columns(inner, &c);
 
@@ -374,15 +382,27 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
     out[inner] = '\0';
 
     /* Name: Norton convention (directories UPPERCASE, files lowercase) unless
-     * the panel preserves the original case (FTP panel: case-sensitive Unix). */
-    if (nc_case()) {
-        for (i = 0; e->name[i] && i < PANEL_NAME_MAX - 1; i++)
-            dispname[i] = (char)(e->is_dir
-                                 ? toupper((unsigned char)e->name[i])
-                                 : tolower((unsigned char)e->name[i]));
+     * the panel preserves the original case (FTP panel: case-sensitive Unix).
+     * Use the full (untruncated) name when the pool holds one, so a wide
+     * name_w (e.g. full-screen Alt+F8 mode) can actually show more than the
+     * PANEL_NAME_MAX-1 chars that fit in e->name; place() below truncates to
+     * the real column width regardless. e->fullname holds the raw WIRE bytes
+     * (see cpmap.h) - for a UTF-8 name that is not display-safe, so convert
+     * to the active codepage first, same as the short e->name already is. */
+    if (e->fullname && cpmap_is_utf8(e->fullname)) {
+        cpmap_utf8_to_cp(e->fullname, convbuf, sizeof(convbuf));
+        src = convbuf;
     } else {
-        for (i = 0; e->name[i] && i < PANEL_NAME_MAX - 1; i++)
-            dispname[i] = e->name[i];
+        src = entry_name(e);
+    }
+    if (nc_case()) {
+        for (i = 0; src[i] && i < PANEL_DISPNAME_MAX - 1; i++)
+            dispname[i] = (char)(e->is_dir
+                                 ? toupper((unsigned char)src[i])
+                                 : tolower((unsigned char)src[i]));
+    } else {
+        for (i = 0; src[i] && i < PANEL_DISPNAME_MAX - 1; i++)
+            dispname[i] = src[i];
     }
     dispname[i] = '\0';
     place(out, c.name_off, dispname, c.name_w, 0);
