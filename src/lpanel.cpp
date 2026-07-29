@@ -6,7 +6,7 @@
  * When LFN is available (lfn_available() != 0) refresh() uses the
  * Int 21h AX=714Eh/714Fh API to enumerate the directory so that long file
  * names are returned. Names that exceed PANEL_NAME_MAX-1 characters are
- * interned in the namePool and accessed via PanelEntry::fullname (same seam
+ * interned in the NameStore and accessed via PanelEntry::nameref (same seam
  * used by RemotePanel for long FTP names). The display name in entry::name
  * is truncated to PANEL_NAME_MAX-1 chars with a trailing '>' marker.
  *
@@ -36,26 +36,12 @@ static void path_leaf(const char *path, char *out, int outsz)
 LocalPanel::LocalPanel()
 {
     cwd[0]   = '\0';
-    namePool = 0;
-    poolUsed = 0;
-    poolSize = 0;
+    namesCut = 0;
+    names    = &nameStore;       /* Panel::materialize() reads through this */
 }
 
 LocalPanel::~LocalPanel()
 {
-    free(namePool);
-    namePool = 0;
-}
-
-/* Intern a long name into the pool. Returns a stable pointer or 0 if full. */
-char *LocalPanel::pool_store(const char *s)
-{
-    unsigned len = (unsigned)strlen(s) + 1;
-    if (!namePool || poolUsed + len > poolSize) return 0;
-    char *dst = namePool + poolUsed;
-    memcpy(dst, s, len);
-    poolUsed += len;
-    return dst;
 }
 
 /* Determine the current working directory (including drive). */
@@ -80,42 +66,69 @@ int LocalPanel::refresh()
     strncpy(header, cwd, PANEL_HEADER_MAX - 1);
     header[PANEL_HEADER_MAX - 1] = '\0';
 
-    /* Lazy-allocate the name pool; reset it on every refresh. */
-    if (namePool == 0) {
-        namePool = (char *)malloc(LOCAL_NAME_POOL);
-        poolSize = namePool ? LOCAL_NAME_POOL : 0;
+    /* Lazy-allocate the name arena; reset it on every refresh. Conventional
+     * memory only (allowExt = 0): a DOS directory holds far fewer long names
+     * than a remote archive, and an XMS handle here would buy nothing. */
+    nameStore.init(LOCAL_NAME_POOL, 0, 0);
+    nameStore.reset();
+    namesCut = 0;
+
+    /* Add ".." ourselves rather than relying on the directory enumeration to
+     * report it (the same way RemotePanel does). DOS keeps "." and ".." in
+     * every subdirectory, but an LFN provider is free to decide whether they
+     * match the "*" pattern: DOSLFN under DOS 7.1 returns neither for an
+     * EMPTY directory, which left the pane with no entry at all - and so no
+     * way back up with Enter. */
+    if (cwd[0] && cwd[1] == ':' && cwd[2] == '\\' && cwd[3] != '\0') {
+        PanelEntry e;
+        memset(&e, 0, sizeof(e));
+        strcpy(e.name, "..");
+        e.is_dir    = 1;
+        e.is_parent = 1;
+        e.nameref   = NAME_NONE;    /* NOT 0 - that is a valid arena handle */
+        total++;
+        if (store->append(&e)) count++;
+        else                   truncated = 1;
     }
-    poolUsed = 0;
 
     if (lfn_available()) {
         /* ---- LFN path: Int 21h AX=714Eh/714Fh ---- */
         LfnFindData fd;
         int handle = lfn_findfirst("*", &fd);
         while (handle >= 0) {
-            /* Skip "." but keep ".." */
-            if (!(fd.name[0] == '.' && fd.name[1] == '\0')) {
+            /* Skip "." and ".." - the parent entry is synthesized above. */
+            if (!(fd.name[0] == '.' &&
+                  (fd.name[1] == '\0' ||
+                   (fd.name[1] == '.' && fd.name[2] == '\0')))) {
                 PanelEntry e;
                 total++;
                 /* Store the full LFN in the pool when it exceeds the name
                  * column; truncate the display name with a '>' marker. */
                 int namelen = (int)strlen(fd.name);
+                e.name_cut = 0;
                 if (namelen >= PANEL_NAME_MAX) {
                     strncpy(e.name, fd.name, PANEL_NAME_MAX - 2);
                     e.name[PANEL_NAME_MAX - 2] = '>';
                     e.name[PANEL_NAME_MAX - 1] = '\0';
-                    e.fullname = pool_store(fd.name);
+                    e.fullname = 0;
+                    e.nameref  = nameStore.put(fd.name);
+                    /* Arena exhausted: 'name' is only a prefix, so the entry
+                     * must not be opened, renamed or deleted - it would hit
+                     * the wrong file (or nothing at all). */
+                    if (e.nameref == NAME_NONE) { e.name_cut = 1; namesCut++; }
                 } else {
                     strncpy(e.name, fd.name, PANEL_NAME_MAX - 1);
                     e.name[PANEL_NAME_MAX - 1] = '\0';
                     e.fullname = 0;
+                    e.nameref  = NAME_NONE;
                 }
                 /* LFN wtime: HIWORD = DOS date, LOWORD = DOS time. */
                 e.date     = (unsigned)(fd.wtime >> 16);
                 e.time     = (unsigned)(fd.wtime & 0xFFFFU);
+                e.no_time  = 0;         /* local files always carry a time */
                 e.size     = fd.size_lo;
                 e.is_dir   = (fd.attr & LFN_A_SUBDIR) ? 1 : 0;
-                e.is_parent = (fd.name[0] == '.' && fd.name[1] == '.'
-                               && fd.name[2] == '\0') ? 1 : 0;
+                e.is_parent = 0;        /* ".." is synthesized, not listed    */
                 e.marked   = 0;
                 if (store->append(&e)) count++;
                 else                   truncated = 1;
@@ -131,18 +144,23 @@ int LocalPanel::refresh()
         unsigned amask = _A_SUBDIR | _A_HIDDEN | _A_SYSTEM | _A_RDONLY | _A_ARCH;
         unsigned rc = _dos_findfirst("*.*", amask, &ff);
         while (rc == 0) {
-            if (!(ff.name[0] == '.' && ff.name[1] == '\0')) {
+            /* Skip "." and ".." - the parent entry is synthesized above. */
+            if (!(ff.name[0] == '.' &&
+                  (ff.name[1] == '\0' ||
+                   (ff.name[1] == '.' && ff.name[2] == '\0')))) {
                 PanelEntry e;
                 total++;
                 strncpy(e.name, ff.name, PANEL_NAME_MAX - 1);
                 e.name[PANEL_NAME_MAX - 1] = '\0';
                 e.fullname  = 0;
+                e.nameref   = NAME_NONE;
+                e.name_cut  = 0;
                 e.size      = ff.size;
                 e.date      = ff.wr_date;
                 e.time      = ff.wr_time;
+                e.no_time   = 0;
                 e.is_dir    = (ff.attrib & _A_SUBDIR) ? 1 : 0;
-                e.is_parent = (ff.name[0] == '.' && ff.name[1] == '.'
-                               && ff.name[2] == '\0') ? 1 : 0;
+                e.is_parent = 0;        /* ".." is synthesized, not listed    */
                 e.marked    = 0;
                 if (store->append(&e)) count++;
                 else                   truncated = 1;

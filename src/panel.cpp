@@ -103,10 +103,20 @@ Panel::Panel()
 {
     top = 1; left = 0; height = 21; width = 40;
     store = &conv;                       /* default backend: conventional memory */
+    names = 0;                           /* set by the subclass                  */
     count = 0; total = 0; truncated = 0;
     cursor = 0; topentry = 0; active = 0;
     header[0] = '\0';
+    selName[0] = '\0'; atName[0] = '\0';
     s_key = SORT_NAME; s_desc = 0;
+}
+
+char *Panel::materialize(const PanelEntry *e, char *buf, int bufsz) const
+{
+    if (bufsz > 0) buf[0] = '\0';
+    if (!names || !e || e->nameref == NAME_NONE) return 0;
+    names->get(e->nameref, buf, bufsz);
+    return buf[0] ? buf : 0;
 }
 
 Panel::~Panel()
@@ -147,9 +157,44 @@ unsigned char Panel::frame_attr() const
     return ATTR_BORDER;
 }
 
-/* Base panels (local DOS filesystem) use the Norton case convention. */
-int Panel::nc_case() const
+/* Base panels (local DOS filesystem) apply the Norton case convention to
+ * every plain 8.3 name; long names keep the case they carry. */
+int Panel::nc_case(const char *name) const
 {
+    return name_is_83(name);
+}
+
+/* Is 'name' a plain 8.3 short name?
+ *
+ * The Norton convention (UPPERCASE directories, lowercase files) exists
+ * because a FAT short name carries no case at all - DOS stores it uppercase,
+ * so displaying it that way loses nothing. A long filename does carry case,
+ * and forcing "My Documents" to "MY DOCUMENTS" or "Release Notes.txt" to
+ * "release notes.txt" throws away information the user put there (reported on
+ * VOGONS once DOSLFN support landed). So the convention now applies only to
+ * names that really are 8.3; everything else is shown verbatim.
+ * On plain DOS 6.22 every name is 8.3, so nothing changes there. */
+int name_is_83(const char *name)
+{
+    int base = 0, ext = 0, dots = 0;
+    const char *p;
+
+    if (name == 0 || name[0] == '\0') return 1;
+    /* "." and ".." are 8.3 by definition. */
+    if (name[0] == '.' && (name[1] == '\0' ||
+                          (name[1] == '.' && name[2] == '\0'))) return 1;
+
+    for (p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '.') {
+            if (++dots > 1) return 0;
+            continue;
+        }
+        /* A space or LFN-only punctuation cannot occur in a short name. */
+        if (c == ' ' || strchr("+,;=[]", (int)c) != 0) return 0;
+        if (dots) { if (++ext  > 3) return 0; }
+        else      { if (++base > 8) return 0; }
+    }
     return 1;
 }
 
@@ -210,6 +255,7 @@ PanelEntry *Panel::selected()
 {
     if (cursor < 0 || cursor >= count) return 0;
     store->fetch(cursor, &selBuf);
+    selBuf.fullname = materialize(&selBuf, selName, (int)sizeof(selName));
     return &selBuf;
 }
 
@@ -217,6 +263,7 @@ PanelEntry *Panel::entry_at(int i)
 {
     if (i < 0 || i >= count) return 0;
     store->fetch(i, &atBuf);
+    atBuf.fullname = materialize(&atBuf, atName, (int)sizeof(atName));
     return &atBuf;
 }
 
@@ -229,8 +276,10 @@ void Panel::select_by_name(const char *name)
              * callers may pass either form for entries longer than the
              * display column (e.g. go_parent with a long directory leaf). */
             const PanelEntry *pe = store->peek(i);
+            char full[NAME_STORE_MAX];
             if (stricmp(pe->name, name) == 0 ||
-                (pe->fullname && stricmp(pe->fullname, name) == 0)) {
+                (materialize(pe, full, (int)sizeof(full)) &&
+                 stricmp(full, name) == 0)) {
                 cursor = i;
                 clamp_scroll();
                 return;
@@ -336,8 +385,12 @@ int Panel::find_prefix(const char *prefix, int start) const
     if (prefix == 0 || prefix[0] == '\0') return -1;
     n = (int)strlen(prefix);
     if (start < 0) start = 0;
-    for (i = start; i < count; i++)
-        if (strnicmp(entry_name(store->peek(i)), prefix, n) == 0) return i;
+    for (i = start; i < count; i++) {
+        const PanelEntry *e = store->peek(i);
+        char full[NAME_STORE_MAX];
+        const char *nm = materialize(e, full, (int)sizeof(full));
+        if (strnicmp(nm ? nm : e->name, prefix, n) == 0) return i;
+    }
     return -1;
 }
 
@@ -367,7 +420,8 @@ void Panel::compare_mark(const Panel *other)
 /* -------------------------------------------------------------------------
  * Format an entry
  * ---------------------------------------------------------------------- */
-void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
+void Panel::format_entry(const PanelEntry *e, const char *full,
+                         char *out, int inner) const
 {
     ColLayout c;
     int i;
@@ -382,20 +436,22 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
     out[inner] = '\0';
 
     /* Name: Norton convention (directories UPPERCASE, files lowercase) unless
-     * the panel preserves the original case (FTP panel: case-sensitive Unix).
-     * Use the full (untruncated) name when the pool holds one, so a wide
+     * the panel preserves the original case (FTP panel: case-sensitive Unix)
+     * or the name is a long filename, whose case carries information (see
+     * name_is_83).
+     * Use the full (untruncated) name when the store holds one, so a wide
      * name_w (e.g. full-screen Alt+F8 mode) can actually show more than the
      * PANEL_NAME_MAX-1 chars that fit in e->name; place() below truncates to
-     * the real column width regardless. e->fullname holds the raw WIRE bytes
+     * the real column width regardless. 'full' holds the raw WIRE bytes
      * (see cpmap.h) - for a UTF-8 name that is not display-safe, so convert
      * to the active codepage first, same as the short e->name already is. */
-    if (e->fullname && cpmap_is_utf8(e->fullname)) {
-        cpmap_utf8_to_cp(e->fullname, convbuf, sizeof(convbuf));
+    if (full && cpmap_is_utf8(full)) {
+        cpmap_utf8_to_cp(full, convbuf, sizeof(convbuf));
         src = convbuf;
     } else {
-        src = entry_name(e);
+        src = full ? full : e->name;
     }
-    if (nc_case()) {
+    if (nc_case(src)) {
         for (i = 0; src[i] && i < PANEL_DISPNAME_MAX - 1; i++)
             dispname[i] = (char)(e->is_dir
                                  ? toupper((unsigned char)src[i])
@@ -426,12 +482,22 @@ void Panel::format_entry(const PanelEntry *e, char *out, int inner) const
         int  mm    = (int)((e->time >> 5)  & 0x3F);
         char ds    = g_locale.date_sep;
         char ts    = g_locale.time_sep;
+        /* "ls -l" prints a YEAR instead of HH:MM for entries older than about
+         * six months, so for those the time is simply not in the listing.
+         * Printing "00:00" there invented a timestamp the server never sent
+         * (an archive directory then showed 00:00 on every single row). Show
+         * the 4-digit year instead - the Norton convention - and keep the
+         * clock for entries that really carry one. MLSD listings always
+         * carry one, so this only affects the LIST fallback. */
+        char clock[8];
+        if (e->no_time) sprintf(clock, "%5d", 1980 + (int)((e->date >> 9) & 0x7F));
+        else            sprintf(clock, "%02d%c%02d", hh, ts, mm);
         if (g_locale.date_order == 1)            /* DMY */
-            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", day, ds, month, ds, year, hh, ts, mm);
+            sprintf(tmp, "%02d%c%02d%c%02d %s", day, ds, month, ds, year, clock);
         else if (g_locale.date_order == 2)       /* YMD */
-            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", year, ds, month, ds, day, hh, ts, mm);
+            sprintf(tmp, "%02d%c%02d%c%02d %s", year, ds, month, ds, day, clock);
         else                                     /* MDY */
-            sprintf(tmp, "%02d%c%02d%c%02d %02d%c%02d", month, ds, day, ds, year, hh, ts, mm);
+            sprintf(tmp, "%02d%c%02d%c%02d %s", month, ds, day, ds, year, clock);
         place(out, c.date_off, tmp, c.date_w, 1);
     }
 }
@@ -463,8 +529,9 @@ void Panel::draw_entry_row(int idx)
         unsigned char a;
         if (is_cur) a = is_mk ? ATTR_MARKED_SEL : ATTR_SELECTED;
         else        a = is_mk ? ATTR_MARKED     : ATTR_PANEL;
+        char full[NAME_STORE_MAX];
         fill_rect(row, left + 1, 1, inner, ' ', a);
-        format_entry(e, buf, inner);
+        format_entry(e, materialize(e, full, (int)sizeof(full)), buf, inner);
         draw_text(row, left + 1, buf, a, inner);
     } else {
         fill_rect(row, left + 1, 1, inner, ' ', ATTR_PANEL);

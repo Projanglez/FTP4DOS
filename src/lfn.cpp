@@ -6,13 +6,17 @@
  * segment:offset needed by int86x() to load DS/ES before the Int 21h call.
  * ===========================================================================*/
 #include <i86.h>      /* int86, int86x, union REGS, struct SREGS, FP_SEG/FP_OFF */
-#include <string.h>   /* memset, strncat, strlen */
-#include <stdio.h>    /* fopen, fdopen (lfn_fopen fallback/wrap) */
+#include <string.h>   /* memset, strncat, strlen, strchr */
+#include <stdio.h>    /* fopen (lfn_fopen does all I/O through the 8.3 alias) */
 #include <direct.h>   /* chdir, _mkdir (non-LFN fallbacks) */
+#include <dos.h>      /* _dos_close (release the raw 716Ch handle again) */
 
 #include "lfn.h"
 
 static int g_lfn = 0;   /* 1 if LFN is available on this system */
+
+/* Defined below; lfn_detect() already needs it to validate the provider. */
+static int lfn_true_short(const char *path, char *out, int outsz);
 
 /* Probe Int 21h/AX=71A0h (Get Volume Information) on the current drive's
  * root. The previously used AX=7100h "NULL function" is undocumented and
@@ -22,13 +26,18 @@ static int g_lfn = 0;   /* 1 if LFN is available on this system */
  * with all registers unchanged for any AH=71h call): CX is the buffer size
  * on input and the maximum filename length on output. We pass CX=12; a real
  * LFN provider overwrites it with 255, the stub leaves it at 12. The FAT/
- * VFAT/CDFS filesystem name always fits the 12-byte buffer. */
+ * VFAT/CDFS filesystem name always fits the 12-byte buffer.
+ *
+ * LFN is a per-VOLUME property - a DOSBox-X mount, a CD-ROM and a network
+ * share can each answer differently - so this runs again after every drive
+ * change, not just once at startup. */
 void lfn_detect(void)
 {
     union  REGS  r;
     struct SREGS sr;
     char root[4];
     char fsname[32];
+    char probe[260];
 
     /* Current drive (AH=19h: 0=A:, 1=B:, ...) -> "X:\" root path. */
     memset(&r, 0, sizeof(r));
@@ -49,7 +58,14 @@ void lfn_detect(void)
     sr.es  = FP_SEG(fsname);
     r.w.di = FP_OFF(fsname);
     int86x(0x21, &r, &r, &sr);
-    g_lfn = (r.w.cflag == 0 && r.w.cx > 12) ? 1 : 0;
+    if (r.w.cflag != 0 || r.w.cx <= 12) { g_lfn = 0; return; }
+
+    /* 71A0h only proves that *some* provider answered. Everything below also
+     * depends on 7160h (truename), which lfn_normalize_path() uses to hand
+     * short directory paths to the plain C library. A provider that answers
+     * the volume-information call but not truename would leave us building
+     * paths nothing can open, so treat that as a non-LFN volume. */
+    g_lfn = (lfn_true_short(root, probe, sizeof(probe)) == 0) ? 1 : 0;
 }
 
 int lfn_available(void) { return g_lfn; }
@@ -190,6 +206,11 @@ void lfn_normalize_path(char *path, int pathsz)
      * directory part (which does exist) and keep the leaf. */
     sep = strrchr(path, '\\');
     if (sep == 0 || sep == path) return;
+    /* "X:\leaf": the directory part IS the drive root. Cutting at the
+     * separator would leave "X:", and truename resolves that to the drive's
+     * CURRENT directory - silently relocating the target. The root needs no
+     * shortening anyway, so leave the path alone. */
+    if (sep == path + 2 && path[1] == ':') return;
     *sep = '\0';
     if (lfn_true_short(path, buf, sizeof(buf)) == 0 &&
         (int)(strlen(buf) + 1 + strlen(sep + 1)) < pathsz) {
@@ -204,24 +225,88 @@ void lfn_normalize_path(char *path, int pathsz)
     }
 }
 
+/* Is the leaf of 'path' a valid 8.3 short name? Then the plain C library can
+ * open it and the 716Ch detour is unnecessary. Deliberately conservative:
+ * anything questionable answers 0 and takes the LFN route. */
+static int leaf_is_short(const char *path)
+{
+    const char *leaf = path;
+    const char *p;
+    int base = 0, ext = 0, dots = 0;
+
+    for (p = path; *p; p++)
+        if (*p == '\\' || *p == '/' || *p == ':') leaf = p + 1;
+
+    if (leaf[0] == '\0') return 0;
+    for (p = leaf; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '.') {
+            if (++dots > 1) return 0;
+            continue;
+        }
+        /* Space and this punctuation are legal in an LFN but not in an 8.3
+         * name; DOS would mangle or reject them. */
+        if (c <= ' ' || strchr("+,;=[]", (int)c) != 0) return 0;
+        if (dots) { if (++ext  > 3) return 0; }
+        else      { if (++base > 8) return 0; }
+    }
+    return base > 0;
+}
+
 FILE *lfn_fopen(const char *path, const char *mode)
 {
     union  REGS  r;
     struct SREGS sr;
-    int wr = (mode[0] == 'w');
-    if (!g_lfn) return fopen(path, mode);
-    memset(&r,  0, sizeof(r));
-    memset(&sr, 0, sizeof(sr));
-    r.w.ax = 0x716C;
-    r.w.bx = wr ? 0x0002 : 0x0000;   /* access: read/write : read-only     */
-    r.w.cx = wr ? 0x0020 : 0x0000;   /* attributes when creating: archive  */
-    r.w.dx = wr ? 0x0012 : 0x0001;   /* create+truncate : open-if-exists   */
-    r.w.di = 0;                      /* numeric-tail alias hint            */
-    sr.ds  = FP_SEG(path);
-    r.w.si = FP_OFF(path);
-    int86x(0x21, &r, &r, &sr);
-    if (r.w.cflag) return 0;
-    return fdopen((int)r.w.ax, mode);   /* AX = DOS file handle */
+    char  sbuf[260];
+    int   handle;
+    int   wr = (mode[0] == 'w');
+
+    /* Non-LFN volume, or a leaf that is already a valid 8.3 name: plain
+     * fopen() does the job. lfn_normalize_path() has already shortened the
+     * directory part, so only the leaf can still be long. Keeping short names
+     * off the 716Ch path means every batch/recursive transfer (those names are
+     * 8.3-mangled by dircopy) uses the same call it always did. */
+    if (!g_lfn || leaf_is_short(path)) return fopen(path, mode);
+
+    /* A long leaf. Int 21h AX=716Ch is the only call that can CREATE it, but
+     * the handle it returns must not be handed to stdio: fdopen() matches the
+     * descriptor against the C runtime's own table, and a handle opened behind
+     * the runtime's back is not in it. Depending on the runtime that either
+     * fails outright - leaving the freshly created 0-byte file and a leaked
+     * handle behind ("Cannot create local file" on DOSBox-X) - or returns a
+     * FILE* whose writes are silently dropped, which is worse: on DOS 7.1 +
+     * DOSLFN the download then "succeeded" and left a 0-byte file.
+     *
+     * So use 716Ch only to bring the long name into existence, close the DOS
+     * handle again, and do all I/O through the file's 8.3 alias with plain
+     * stdio. The long name stays on disk; only the path we read/write through
+     * is the short one. */
+    if (wr) {
+        memset(&r,  0, sizeof(r));
+        memset(&sr, 0, sizeof(sr));
+        r.w.ax = 0x716C;
+        r.w.bx = 0x0002;             /* access: read/write                 */
+        r.w.cx = 0x0020;             /* attributes when creating: archive  */
+        r.w.dx = 0x0012;             /* create + truncate                  */
+        r.w.di = 0;                  /* numeric-tail alias hint            */
+        sr.ds  = FP_SEG(path);
+        r.w.si = FP_OFF(path);
+        int86x(0x21, &r, &r, &sr);
+        if (r.w.cflag) return 0;
+        handle = (int)r.w.ax;        /* AX = DOS file handle */
+        _dos_close(handle);
+    }
+
+    /* The file exists now (for "r" it had to already). Its 8.3 alias is what
+     * stdio can open. */
+    if (lfn_true_short(path, sbuf, sizeof(sbuf)) == 0) {
+        FILE *fp = fopen(sbuf, mode);
+        if (fp) return fp;
+    }
+
+    /* No usable alias: don't leave the empty file we just created behind. */
+    if (wr) lfn_remove(path);
+    return 0;
 }
 
 int lfn_chdir(const char *path)

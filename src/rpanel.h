@@ -15,14 +15,16 @@
 #include "panel.h"
 #include "ftpcli.h"
 
-/* Parse one raw LIST line into a PanelEntry (Unix or DOS/IIS format).
- * curYear supplies the year for lines that only carry a time (no year).
+/* Parse one raw listing line into a PanelEntry.
+ * mlsd != 0: the line came from MLSD (RFC 3659) and is parsed as a fact list;
+ * mlsd == 0: Unix "ls -l" or MS-DOS/IIS LIST output.
+ * curYear supplies the year for LIST lines that only carry a time (no year).
  * 'full'/'fullcap' (optional) receive the untruncated name; pass 0 to ignore.
  * Returns 1 = recognized (e filled in: name, size, date, is_dir, marked=0,
- *         fullname=0), 0 = line not recognizable as an entry. Also used by the
+ *         nameref=NAME_NONE), 0 = line not recognizable as an entry. Also used by the
  * recursive directory download (dircopy.cpp). */
 int ftp_parse_list_line(const char *line, int curYear, PanelEntry *e,
-                        char *full = 0, int fullcap = 0);
+                        char *full = 0, int fullcap = 0, int mlsd = 0);
 
 class RemotePanel : public Panel {
 public:
@@ -41,10 +43,30 @@ public:
     int         nav_failed() const { return navFailed; }
     const char *last_error() const { return ftp ? ftp->last_error() : ""; }
 
+    /* How many entries of the last listing had a name too long for the name
+     * pool. Those carry only a cut prefix (PanelEntry::name_cut) and cannot
+     * be acted on; the caller warns the user once per listing. */
+    int names_cut() const { return namesCut; }
+
+    /* Whether the name arena may live in extended/expanded memory, and which
+     * kind to prefer (0 auto, 1 XMS, 2 EMS). Mirrors the entry store's own
+     * /EXMEM and /NOEXMEM handling; call before the first refresh(). */
+    void set_name_memory(int allowExt, int pref)
+    { nameExtAllow = allowExt; nameExtPref = pref; }
+
+    /* Where the names of the last listing ended up ("XMS"/"EMS"/
+     * "conventional"), and how much of the arena they used. Diagnostics only. */
+    const char *names_kind() const { return nameStore.kind(); }
+
 private:
-    /* FTP servers (Unix) are case-sensitive: show names verbatim instead of
-     * forcing the Norton UPPERCASE-dir / lowercase-file convention. */
-    int nc_case() const { return 0; }
+    /* FTP servers are case-sensitive, so a name that carries case must be
+     * shown exactly as the server spelled it. An ALL-CAPS 8.3 name carries
+     * none - it is the classic DOS spelling, and leaving it uppercase next to
+     * the local pane's lowercase made the two sides of the same directory
+     * look different. So the Norton convention applies to those, and only
+     * those: anything with a lowercase letter, or any long name, stays
+     * verbatim. Defined in rpanel.cpp. */
+    int nc_case(const char *name) const;
 
     FtpClient *ftp;
     /* Full remote path (via PWD), NOT truncated to the header display width -
@@ -55,16 +77,15 @@ private:
     int  navFailed;             /* 1 = the last action reported an error       */
     int  curYear;               /* current year (for date lines with a time)  */
 
-    /* Pool of full (untruncated) names for the current listing. PanelEntry
-     * records point into it via 'fullname'. Allocated lazily, reused (reset)
-     * on every refresh; stable while the listing lives, so the pointers in
-     * entries[] stay valid across sort_entries(). */
-    char    *namePool;
-    unsigned poolUsed;
-    unsigned poolSize;
-    /* Copy 's' into the pool; returns a pointer into it, or 0 if it doesn't
-     * fit (caller then leaves fullname=0 and falls back to the short name). */
-    char *pool_store(const char *s);
+    /* Arena of full (untruncated) names for the current listing; entries refer
+     * to it by handle (PanelEntry::nameref), which is why it can live in
+     * XMS/EMS. Allocated lazily on the first refresh and reused (reset) after
+     * that; handles stay valid across sort_entries(), which only moves
+     * records. Panel::names points here. */
+    NameStore nameStore;
+    int       nameExtAllow;     /* 0 = conventional memory only (/NOEXMEM)    */
+    int       nameExtPref;      /* 0 auto, 1 XMS, 2 EMS                       */
+    int       namesCut;         /* entries whose name did not fit the arena   */
 
     /* LIST callback (ftpcli calls this for every raw line). */
     static void on_line(void *ctx, const char *line);

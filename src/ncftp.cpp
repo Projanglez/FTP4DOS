@@ -40,7 +40,7 @@
 #include "lfn.h"
 #include "umlaut.h"   /* always include last */
 
-#define APP_VERSION "1.0.0"
+#define APP_VERSION "1.0.1"
 
 /* ---- Screen layout ---- */
 #define PANEL_TOP     0
@@ -73,12 +73,14 @@ static char g_pass[40]           = "";
 static int  g_savepw      = 1;   /* remember password (0 = host/user only)     */
 static int  g_saveconn    = 1;   /* 0 = do not save this session in NCFTP.SAV  */
 static int  g_autoconnect = 0;   /* auto-connect via command line (-h)         */
+static int  g_lastcon     = 0;   /* /LASTCON: connect to the saved connection  */
 static int  g_start_sites = 0;   /* /SITES: open the site manager on startup   */
 static int  g_nosplash    = 0;   /* /Q: skip splash screen                     */
 static int  g_swapped     = 0;   /* Ctrl-U: local panel on the right (saved)   */
 static int  g_fullscreen  = 0;   /* Alt+F8: active panel spans the full width   */
 static int  g_video_pref  = -1;  /* -1 auto, 0 force color, 1 force mono        */
-static int  g_exmem       = 0;   /* /EXMEM: 1 = use extended/expanded memory   */
+static int  g_exmem       = 0;   /* /EXMEM was given explicitly (diagnostics) */
+static int  g_noexmem     = 0;   /* /NOEXMEM: never touch XMS/EMS             */
 static int  g_exmem_pref  = 0;   /* 0 auto, 1 XMS, 2 EMS                        */
 static ExtStore *g_extStore = 0; /* remote panel's XMS/EMS store (when /EXMEM)  */
 
@@ -87,6 +89,8 @@ static void warn_truncated(Panel *p);   /* popup when a listing didn't all fit  
 /* Persisted UI state: FTP start directory + per-pane sort mode (FTP4DOS.SAV).
  * Zero-initialized: empty start dir, both panes use the default sort until the
  * user picks one. */
+/* startdir, then l/r sort (key, desc, saved) - positional, so keep it in sync
+ * with struct UiState in connsave.h. */
 static UiState g_ui = { "", 0, 0, 0, 0, 0, 0 };
 
 /* Set by perform_connect() when the optional start directory could not be
@@ -508,12 +512,33 @@ struct CopyCtx {
     /* timing, in BIOS ticks (55 ms each) */
     unsigned long file_start;       /* tick the current file began             */
     unsigned long pause_ticks;      /* total ticks spent paused on this file   */
-    unsigned long samp_tick, samp_bytes;  /* last instantaneous-speed sample   */
+    /* Whole-operation timing. Kept separately from the per-file values above
+     * because a recursive copy is mostly small files: restarting the average
+     * on every one of them made the rate and ETA jump wildly and, for files
+     * shorter than one sample window, never update at all. */
+    unsigned long batch_start;      /* tick the whole operation began          */
+    unsigned long batch_pause;      /* ticks spent paused across the operation */
+    /* Instantaneous-speed sample. Counted in BATCH bytes so it survives a file
+     * boundary - against per-file bytes the delta would go negative there. */
+    unsigned long samp_tick, samp_bytes;
     unsigned long cur_speed;        /* last instantaneous bytes/sec            */
     unsigned long last_draw;        /* tick of the last dialog redraw          */
 };
 
-/* (Re)start the per-file timing for a fresh file/transfer. */
+/* Start the whole operation (once, before the first file). */
+static void copyctx_batch_start(CopyCtx *c)
+{
+    unsigned long now = bios_ticks();
+    if (!c) return;
+    c->batch_start = now;
+    c->batch_pause = 0;
+    c->samp_tick   = now;
+    c->samp_bytes  = 0;
+    c->cur_speed   = 0;
+}
+
+/* (Re)start the per-file timing for a fresh file/transfer. Deliberately does
+ * NOT touch the sampler or the batch timing - those span the operation. */
 static void copyctx_file_start(CopyCtx *c)
 {
     unsigned long now = bios_ticks();
@@ -522,9 +547,6 @@ static void copyctx_file_start(CopyCtx *c)
     c->file_total     = 0;
     c->file_start     = now;
     c->pause_ticks    = 0;
-    c->samp_tick      = now;
-    c->samp_bytes     = 0;
-    c->cur_speed      = 0;
     c->last_draw      = 0;
 }
 
@@ -539,9 +561,16 @@ static void progress_fill(CopyCtx *c, unsigned long sofar, unsigned long total,
     pi->file_eta_sec  = -1;
     pi->batch_eta_sec = -1;
     if (c) {
-        unsigned long el = bios_ticks() - c->file_start - c->pause_ticks;  /* ticks */
-        unsigned long avg = bytes_per_sec(sofar, el * 55UL);
+        unsigned long now = bios_ticks();
+        unsigned long fel = now - c->file_start  - c->pause_ticks;   /* ticks */
+        unsigned long bel = now - c->batch_start - c->batch_pause;
+        unsigned long favg   = bytes_per_sec(sofar, fel * 55UL);
         unsigned long bsofar = c->batch_base + sofar;
+        unsigned long bavg   = bytes_per_sec(bsofar, bel * 55UL);
+        /* In a batch the operation-wide average is both the more useful and
+         * the far steadier number, so show that one and estimate with it. */
+        unsigned long avg    = (c->batch && bavg) ? bavg : favg;
+
         pi->cur_speed   = c->cur_speed;
         pi->avg_speed   = avg;
         if (total > sofar && avg) pi->file_eta_sec = (long)((total - sofar) / avg);
@@ -550,8 +579,31 @@ static void progress_fill(CopyCtx *c, unsigned long sofar, unsigned long total,
         pi->files_total = c->files_total;
         pi->batch_sofar = bsofar;
         pi->batch_total = c->batch_total;
-        if (c->batch_total > bsofar && avg)
-            pi->batch_eta_sec = (long)((c->batch_total - bsofar) / avg);
+        if (c->batch_total > bsofar && avg) {
+            unsigned long eta = (c->batch_total - bsofar) / avg;
+            /* A pure byte rate is the wrong model for a tree of small files:
+             * most of the time goes into per-file cost that has nothing to do
+             * with size (PASV + RETR + 226 round trips, open/close, MKD, and
+             * the LIST of each level). Once a copy moves from a few large
+             * files to a tail of hundreds of small ones, the byte estimate
+             * collapses to a fraction of the real time - measured here on a
+             * 644-file game directory it said 13 s with 85 s left to run.
+             * So also estimate from the observed cost PER FILE and report
+             * whichever is worse. Both numbers are wall-clock derived, so the
+             * per-file overhead is already inside them; taking the maximum
+             * just picks the model that fits the phase we are in. */
+            if (c->files_total > c->files_done && c->files_done > 0) {
+                unsigned long left = (unsigned long)(c->files_total - c->files_done);
+                /* Scale BEFORE dividing. Per-file cost is a fraction of a tick
+                 * here (~0.1 s), and dividing first truncated it to a whole
+                 * tick - which nearly halved the estimate and let the byte
+                 * model win anyway, defeating the whole point. */
+                unsigned long fe = (bel * left) / (unsigned long)c->files_done;
+                fe = (fe * 55UL) / 1000UL;                    /* ticks -> s */
+                if (fe > eta) eta = fe;
+            }
+            pi->batch_eta_sec = (long)eta;
+        }
     }
 }
 
@@ -581,8 +633,9 @@ static int progress_keys(CopyCtx *c, unsigned long sofar, unsigned long total)
         if (c) {                                /* discount the paused time */
             unsigned long now = bios_ticks();
             c->pause_ticks += (now - pstart);
+            c->batch_pause += (now - pstart);
             c->samp_tick   = now;
-            c->samp_bytes  = sofar;
+            c->samp_bytes  = c->batch_base + sofar;   /* sampler is batch-wide */
             c->last_draw   = 0;
         }
         progress_fill(c, sofar, total, 0, &pi);
@@ -599,13 +652,14 @@ static int copy_progress(void *ctx, unsigned long sofar, unsigned long total)
     unsigned long now = bios_ticks();
 
     if (c) {
+        unsigned long bsofar = c->batch_base + sofar;
         c->cur_file_sofar = sofar;
         c->file_total     = total;
         if ((now - c->samp_tick) >= 9UL) {      /* resample speed ~ every 0.5s */
-            c->cur_speed  = bytes_per_sec(sofar - c->samp_bytes,
+            c->cur_speed  = bytes_per_sec(bsofar - c->samp_bytes,
                                           (now - c->samp_tick) * 55UL);
             c->samp_tick  = now;
-            c->samp_bytes = sofar;
+            c->samp_bytes = bsofar;
         }
     }
 
@@ -687,6 +741,26 @@ static void join_local(char *out, int outsz, const char *dir, const char *name)
     lfn_normalize_path(out, outsz);
 }
 
+/* Entries whose real name did not fit the name pool hold only a cut prefix.
+ * Acting on one would address the wrong file - or, against a server, draw a
+ * confusing "550 No such file" for a name the user can plainly see. Refuse
+ * up front and say why. Returns 1 when the entry is safe to use. */
+static int name_complete(const PanelEntry *e)
+{
+    if (e == 0 || !e->name_cut) return 1;
+    dlg_error(L("Name too long", "Name zu lang"),
+        L("This entry's full name did not fit in memory,\n"
+          "so only part of it is known and it cannot be used.\n\n"
+          "Open the directory in smaller portions, or use a\n"
+          "server listing with shorter names.",
+          "Der vollst" ae "ndige Name dieses Eintrags passte nicht\n"
+          "in den Speicher; er ist nur teilweise bekannt und\n"
+          "kann nicht verwendet werden.\n\n"
+          "Verzeichnis in kleineren Teilen " oe "ffnen oder eine\n"
+          "Serverliste mit k" ue "rzeren Namen verwenden."));
+    return 0;
+}
+
 /* Copy a single file interactively (target name editable, overwrite prompt).
  * to_remote != 0 => upload (local -> remote), otherwise download. */
 static void copy_single_file_interactive(int to_remote, PanelEntry *e)
@@ -696,6 +770,12 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
     int     rc;
     CopyCtx cc;
     const char *abortmsg = 0;
+
+    /* Only a prefix of this name is known (name pool overflow), so it must
+     * not reach RETR/STOR. copy_one_entry() guards the batch path; this is
+     * the interactive single-file path, which reached the server with the cut
+     * name and produced "RETR refused (550)" - the originally reported bug. */
+    if (!name_complete(e)) { redraw_all(); return; }
 
     memset(&cc, 0, sizeof(cc));
     cc.files_total = 1;
@@ -722,6 +802,7 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
         redraw_all();
         dlg_progress_begin(L("Download", "Download"), 0);
         dlg_progress_setfile(e->name, 1, 1);
+        copyctx_batch_start(&cc);
         copyctx_file_start(&cc);
         rc = g_ftp.retr(entry_name(e), target, copy_progress, &cc);
         dlg_progress_end();
@@ -750,6 +831,7 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
         redraw_all();
         dlg_progress_begin(L("Upload", "Upload"), 0);
         dlg_progress_setfile(target, 1, 1);
+        copyctx_batch_start(&cc);
         copyctx_file_start(&cc);
         rc = g_ftp.stor(localpath, target, copy_progress, &cc);
         dlg_progress_end();
@@ -769,6 +851,12 @@ static void copy_single_file_interactive(int to_remote, PanelEntry *e)
 static int copy_one_entry(int to_remote, PanelEntry *e, CopyCtx *cc)
 {
     char localpath[PANEL_HEADER_MAX + 260 + 4];
+
+    /* Only a prefix of this name is known (name pool overflow): copying it
+     * would fetch the wrong file or draw a bogus 550. warn_truncated() has
+     * already explained the situation, so just count it as an error here
+     * instead of interrupting a batch with a dialog per entry. */
+    if (e->name_cut) return FTP_ERR_GENERAL;
 
     join_local(localpath, (int)sizeof(localpath), g_left.path(), entry_name(e));
 
@@ -884,6 +972,7 @@ static void do_copy(void)
 
     memset(&cc, 0, sizeof(cc));        /* fresh per operation (no "all" carries over) */
     cc.batch = 1;
+    copyctx_batch_start(&cc);
     if (scan_ok) { cc.files_total = (int)nfiles; cc.batch_total = nbytes; }
 
     redraw_all();
@@ -934,6 +1023,7 @@ static void do_view(void)
     if (g_active == 0) return;
     e = g_active->selected();
     if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
+    if (!name_complete(e)) { redraw_all(); return; }
 
     if (g_active == (Panel *)&g_left) {
         /* View local file directly. */
@@ -957,6 +1047,7 @@ static void do_view(void)
         redraw_all();
         dlg_progress_begin(L("View", "Anzeigen"), 0);
         dlg_progress_setfile(e->name, 1, 1);
+        copyctx_batch_start(&cc);
         copyctx_file_start(&cc);
         rc = g_ftp.retr(entry_name(e), path, copy_progress, &cc);
         dlg_progress_end();
@@ -996,6 +1087,7 @@ static void do_checksum(void)
     if (g_active == 0) return;
     e = g_active->selected();
     if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
+    if (!name_complete(e)) { redraw_all(); return; }
 
     if (g_active == (Panel *)&g_left) {
         join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
@@ -1018,6 +1110,7 @@ static void do_checksum(void)
         redraw_all();
         dlg_progress_begin(L("Checksum", "Pr" ue "fsumme"), 0);
         dlg_progress_setfile(e->name, 1, 1);
+        copyctx_batch_start(&cc);
         copyctx_file_start(&cc);
         rc = g_ftp.retr(entry_name(e), path, copy_progress, &cc);
         dlg_progress_end();
@@ -1130,17 +1223,45 @@ static void do_detail(void)
     redraw_all();
 }
 
+/* How many entries of the active panel's last listing had a cut name. The
+ * counter lives in the concrete panels, not in the Panel base class. */
+static int panel_names_cut(Panel *p)
+{
+    if (p == (Panel *)&g_left)  return g_left.names_cut();
+    if (p == (Panel *)&g_right) return g_right.names_cut();
+    return 0;
+}
+
 /* If the last listing didn't fit the panel's buffer, tell the user (once per
  * listing - refresh() clears the flag). Hint at /EXMEM for more room. */
 static void warn_truncated(Panel *p)
 {
-    char msg[200];
-    if (p == 0 || !p->is_truncated()) return;
-    sprintf(msg,
-        L("This directory has %d entries; only the\nfirst %d can be shown.\n\nStart with /EXMEM (XMS/EMS) to list them all.",
-          "Dieses Verzeichnis hat %d Eintr" ae "ge; nur die\nersten %d sind anzeigbar.\n\nMit /EXMEM (XMS/EMS) alle anzeigen."),
-        p->total_count(), p->entry_count());
-    dlg_message(L("Directory truncated", "Verzeichnis gek" ue "rzt"), msg, 0);
+    char msg[260];
+    int  cut;
+    if (p == 0) return;
+
+    if (p->is_truncated()) {
+        sprintf(msg,
+            L("This directory has %d entries; only the\nfirst %d can be shown.\n\nStart with /EXMEM (XMS/EMS) to list them all.",
+              "Dieses Verzeichnis hat %d Eintr" ae "ge; nur die\nersten %d sind anzeigbar.\n\nMit /EXMEM (XMS/EMS) alle anzeigen."),
+            p->total_count(), p->entry_count());
+        dlg_message(L("Directory truncated", "Verzeichnis gek" ue "rzt"), msg, 0);
+    }
+
+    /* Separate condition: the entries fit, but some of their names did not.
+     * Those are marked with '>' and every action on them is refused, so say
+     * so once rather than letting the user discover it one 550 at a time. */
+    cut = panel_names_cut(p);
+    if (cut > 0) {
+        /* Deliberately does NOT suggest /EXMEM: extended memory backs the
+         * ENTRY list and is already used automatically, while the name pool
+         * lives in conventional memory and is capped at one segment. */
+        sprintf(msg,
+            L("%d entries have names too long to keep in memory.\nThey are marked with '>' and cannot be opened,\ncopied, renamed or deleted.\n\nThe rest of the directory is unaffected.",
+              "%d Eintr" ae "ge haben zu lange Namen f" ue "r den Speicher.\nSie sind mit '>' markiert und k" oe "nnen nicht ge" oe "ffnet,\nkopiert, umbenannt oder gel" oe "scht werden.\n\nDer Rest des Verzeichnisses ist nicht betroffen."),
+            cut);
+        dlg_message(L("Names truncated", "Namen gek" ue "rzt"), msg, 0);
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -1209,6 +1330,7 @@ static void do_edit(void)
     if (g_active == 0) return;
     e = g_active->selected();
     if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
+    if (!name_complete(e)) { redraw_all(); return; }
 
     if (g_active != (Panel *)&g_left) {
         dlg_error(L("Edit", "Bearbeiten"),
@@ -1276,6 +1398,8 @@ static void do_mkdir(void)
  * or the caller reports a generic message). on_remote != 0 => remote side. */
 static int delete_one_entry(int on_remote, PanelEntry *e)
 {
+    /* See copy_one_entry(): a cut name must never reach DELE or remove(). */
+    if (e->name_cut) return -1;
     if (on_remote) {
         return e->is_dir ? g_ftp.remove_dir(entry_name(e)) : g_ftp.remove_file(entry_name(e));
     } else {
@@ -1488,6 +1612,7 @@ static void do_move(void)
 
     memset(&cc, 0, sizeof(cc));        /* fresh per operation (no "all" carries over) */
     cc.batch = 1;
+    copyctx_batch_start(&cc);
     if (scan_ok) { cc.files_total = (int)nfiles; cc.batch_total = nbytes; }
 
     redraw_all();
@@ -1537,6 +1662,7 @@ static void do_rename(void)
     if (g_active == 0) return;
     e = g_active->selected();
     if (e == 0 || e->is_parent) { redraw_all(); return; }
+    if (!name_complete(e)) { redraw_all(); return; }
 
     strncpy(newname, entry_name(e), sizeof(newname) - 1);
     newname[sizeof(newname) - 1] = '\0';
@@ -1688,10 +1814,14 @@ static void do_drives(void)
          * handler prevents the DOS prompt. */
         if (getcwd(test, sizeof(test)) == 0) {
             _chdrive(cur);             /* revert to the old drive */
+            lfn_detect();
             dlg_error(L("Drive", "Laufwerk"),
                       L("Drive not ready.", "Laufwerk nicht bereit."));
             redraw_all(); return;
         }
+        /* LFN support is a per-volume property: a DOSBox-X mount or a network
+         * share can offer it where the previous drive did not, and vice versa. */
+        lfn_detect();
         g_left.refresh();
     }
     set_active((Panel *)&g_left);      /* drive change affects the local panel */
@@ -1703,10 +1833,11 @@ static void print_usage(void)
 {
     printf("FTP4DOS v" APP_VERSION " - Dual-Pane FTP Client for DOS\n");
     printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ftp4dos\n\n");
-    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]] [/Q] [/MONO|/COLOR]\n");
+    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/Q] [/MONO|/COLOR]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
     printf("  /H:HOST         connect to HOST automatically on startup\n");
+    printf("  /LASTCON        connect straight to the last used connection\n");
     printf("  /P:PORT         port (default 21)\n");
     printf("  /U:USER         user name (default anonymous)\n");
     printf("  /W:PASS         password  (WARNING: stored in cleartext in the batch file)\n");
@@ -1715,8 +1846,9 @@ static void print_usage(void)
     printf("  /S:NOPASS       save connection but not the password\n");
     printf("  /S:OFF          do not save this connection\n");
     printf("  /SITES          open the site manager on startup\n");
-    printf("  /EXMEM          list very large remote dirs via extended/expanded\n");
-    printf("                  memory (auto: XMS then EMS; force with /EXMEM:XMS or :EMS)\n");
+    printf("  /EXMEM          force extended/expanded memory for large remote dirs\n");
+    printf("                  (used automatically when available; :XMS or :EMS picks one)\n");
+    printf("  /NOEXMEM        never use XMS/EMS, stay in conventional memory\n");
     printf("  /Q              skip splash screen\n");
     printf("  /MONO           force monochrome display (MDA/Hercules)\n");
     printf("  /COLOR          force color display (default: auto-detect)\n");
@@ -1761,7 +1893,15 @@ int main(int argc, char *argv[])
             val = (o[1] == ':') ? (o + 2) : "";
 
             switch (f) {
-            case 'l':   /* language: value is case-insensitive */
+            case 'l':
+                /* Two switches start with 'l' and the dispatch above only
+                 * looks at the first letter, so /LASTCON has to identify
+                 * itself before /L:EN|DE gets to interpret the value. */
+                if (strnicmp(o, "lastcon", 7) == 0 && o[7] == '\0') {
+                    g_lastcon = 1;
+                    break;
+                }
+                /* language: value is case-insensitive */
                 if (val[0] == 'e' || val[0] == 'E') g_english = 1;
                 else if (val[0] == 'd' || val[0] == 'D') g_english = 0;
                 break;
@@ -1783,14 +1923,15 @@ int main(int argc, char *argv[])
                 g_ui.startdir[sizeof(g_ui.startdir) - 1] = 0;
                 break;
             case 's':
-                if (strnicmp(o, "sites", 5) == 0 && o[5] == '\0') {
-                    g_start_sites = 1;      /* /SITES: site manager on startup */
-                }
+                /* The dispatch above keys on the first letter only, so /SITES
+                 * has to identify itself before /S:... reads the value. */
+                if (strnicmp(o, "sites", 5) == 0 && o[5] == '\0')
+                    g_start_sites = 1;
                 else if (stricmp(val, "OFF")    == 0) g_saveconn = 0;
                 else if (stricmp(val, "NOPASS") == 0) { g_saveconn = 1; g_savepw = 0; }
                 else if (stricmp(val, "ALL")    == 0) { g_saveconn = 1; g_savepw = 1; }
                 break;
-            case 'q':
+            case 'q':       /* /Q : skip the splash screen */
                 g_nosplash = 1;
                 break;
             case 'm':       /* /MONO  : force monochrome (MDA/Hercules) */
@@ -1810,6 +1951,12 @@ int main(int argc, char *argv[])
                     }
                 }
                 break;
+            case 'n':       /* /NOEXMEM : stay in conventional memory */
+                /* The dispatch above keys on the first letter only, so a long
+                 * switch has to verify the rest of the word itself. */
+                if (strnicmp(o, "noexmem", 7) == 0 && o[7] == '\0')
+                    g_noexmem = 1;
+                break;
             case '?':
                 want_help = 1;
                 break;
@@ -1818,6 +1965,15 @@ int main(int argc, char *argv[])
             }
         }
         if (want_help) { print_usage(); return 0; }
+    }
+
+    /* /LASTCON: reconnect to whatever FTP4DOS.SAV holds, with no dialog. The
+     * saved fields were loaded into g_host/g_portStr/g_user/g_pass above, so
+     * this only has to arm the same auto-connect path /H uses. Without a saved
+     * host there is nothing to connect to - say so and carry on locally. */
+    if (g_lastcon) {
+        if (g_host[0]) g_autoconnect = 1;
+        else           printf("No saved connection in FTP4DOS.SAV - /LASTCON ignored.\n");
     }
 
     /* Detect Long Filename support (DOS 7.x / DOSLFN). Must be called before
@@ -1837,22 +1993,52 @@ int main(int argc, char *argv[])
 
     tui_init(g_video_pref);
 
-    /* /EXMEM: back the remote panel with XMS/EMS so huge listings fit. The
-     * local panel keeps the standard conventional buffer. */
-    if (g_exmem) {
+    /* Back the remote panel with XMS/EMS so huge listings fit. This is now
+     * attempted by DEFAULT (a single-tasking DOS box may as well use the
+     * memory it has); /NOEXMEM opts out, /EXMEM[:XMS|:EMS] forces a backend.
+     *
+     * The capacity guard matters: both allocators back off to a 16 KB floor,
+     * which is 292 records - FEWER than the 512 of the conventional store
+     * they would replace, and slower. So the external store is adopted only
+     * when it is actually bigger.
+     *
+     * Diagnostics are shown only when the user ASKED for /EXMEM. On the
+     * automatic path a machine without XMS is not an error, so it falls back
+     * silently.
+     *
+     * The LOCAL panel deliberately keeps the conventional store: each
+     * ExtStore costs a 16 KB conventional order[] index, and conventional
+     * memory is the scarce resource here (it also caps the name pool), while
+     * a DOS directory with more than PANEL_MAX_ENTRIES files is far rarer
+     * than a remote one. */
+    /* The full-name arena follows the same policy: /NOEXMEM keeps it in
+     * conventional memory, otherwise it may claim its own XMS/EMS block. It
+     * only does so when the entry store is big enough that the names could
+     * not fit conventionally anyway (see NameStore::init). */
+    g_right.set_name_memory(g_noexmem ? 0 : 1, g_exmem_pref);
+
+    if (!g_noexmem) {
+        int explicitly = g_exmem;       /* user typed /EXMEM */
         ExtMem *mem = extmem_create(g_exmem_pref);
         if (mem) {
             g_extStore = new ExtStore(mem);
-            if (g_extStore && g_extStore->ok()) {
+            if (g_extStore && g_extStore->ok() &&
+                g_extStore->capacity() > PANEL_MAX_ENTRIES) {
                 g_right.use_store(g_extStore);
             } else {
+                int toosmall = (g_extStore && g_extStore->ok());
                 if (g_extStore) { delete g_extStore; g_extStore = 0; }
                 else            { delete mem; }
-                dlg_message(L("Extended memory", "Erweiterter Speicher"),
-                    L("Could not reserve extended memory.\nUsing the standard list.",
-                      "Erweiterter Speicher nicht reservierbar.\nStandardliste wird verwendet."), 0);
+                if (explicitly) {
+                    dlg_message(L("Extended memory", "Erweiterter Speicher"),
+                        toosmall
+                        ? L("Too little extended memory free to help.\nUsing the standard list.",
+                            "Zu wenig erweiterter Speicher frei.\nStandardliste wird verwendet.")
+                        : L("Could not reserve extended memory.\nUsing the standard list.",
+                            "Erweiterter Speicher nicht reservierbar.\nStandardliste wird verwendet."), 0);
+                }
             }
-        } else {
+        } else if (explicitly) {
             dlg_message(L("Extended memory", "Erweiterter Speicher"),
                 L("XMS/EMS not available.\nUsing the standard list.",
                   "XMS/EMS nicht verf" ue "gbar.\nStandardliste wird verwendet."), 0);
@@ -1872,15 +2058,15 @@ int main(int argc, char *argv[])
 
     if (!g_nosplash) dlg_splash(APP_VERSION);
 
-    /* Auto-connect if a host was given on the command line (-h).
-     * Right after startup the packet driver has only just been hooked in
-     * and the link is still cold - so let the stack warm up briefly before
-     * the first connection attempt. perform_connect() itself handles the
-     * transient retry (so this also applies to F2). */
+    /* Auto-connect if a host was given on the command line (/H) or /LASTCON
+     * armed the saved one. Right after startup the packet driver has only
+     * just been hooked in and the link is still cold - so let the stack warm
+     * up briefly before the first connection attempt. perform_connect()
+     * itself handles the transient retry (so this also applies to F2). */
     if (g_start_sites) {
         /* /SITES: open the site manager (via the connect dialog) right away.
-         * Takes precedence over /H auto-connect - both ask for a connection,
-         * but /SITES is the explicitly interactive one. */
+         * Takes precedence over /H and /LASTCON - all three ask for a
+         * connection, but /SITES is the explicitly interactive one. */
         do_connect(1);
     } else if (g_autoconnect) {
         if (g_ftp_ready) {
@@ -1978,6 +2164,9 @@ int main(int argc, char *argv[])
         }
 
         case KEY_ENTER:
+            /* A directory whose name did not fit the pool cannot be entered:
+             * CWD with the prefix would fail (or land somewhere else). */
+            if (!name_complete(g_active->selected())) { redraw_all(); break; }
             if (g_active->enter_selected()) {
                 g_active->draw();
                 draw_statusbar();

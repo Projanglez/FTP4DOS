@@ -16,9 +16,11 @@
 #include "panel.h"
 #include "lfn.h"
 
-/* Name pool for LFN entries whose name exceeds PANEL_NAME_MAX-1 characters.
- * Sized for ~100 long names (typical DOS directory). */
-#define LOCAL_NAME_POOL 8192U
+/* Name arena for LFN entries whose name exceeds PANEL_NAME_MAX-1 characters.
+ * Sized for ~100 long names (typical DOS directory). The local pane keeps the
+ * conventional store (see the note in ncftp.cpp on why it does not get an
+ * ExtStore), so this stays in conventional memory too. */
+#define LOCAL_NAME_POOL 8192L
 
 class LocalPanel : public Panel {
 public:
@@ -31,18 +33,20 @@ public:
 
     const char *path() const { return cwd; }
 
+    /* Entries of the last read whose name did not fit the pool; those carry
+     * only a cut prefix (PanelEntry::name_cut) and cannot be acted on. */
+    int names_cut() const { return namesCut; }
+
 private:
     char cwd[PANEL_HEADER_MAX]; /* current working directory (with drive)    */
 
-    /* Pool for LFN entries whose name exceeds PANEL_NAME_MAX-1 bytes.
-     * Allocated lazily on first refresh(); reset (poolUsed=0) each refresh.
-     * Entries point into this pool via PanelEntry::fullname. */
-    char    *namePool;
-    unsigned poolUsed;
-    unsigned poolSize;
+    /* Arena for LFN entries whose name exceeds PANEL_NAME_MAX-1 bytes.
+     * Allocated lazily on the first refresh() and reset each refresh; entries
+     * refer to it by handle (PanelEntry::nameref). Panel::names points here. */
+    NameStore nameStore;
+    int       namesCut;         /* entries whose name did not fit the arena  */
 
     void read_cwd();            /* fetch cwd from DOS (LFN-aware)            */
-    char *pool_store(const char *s); /* intern a long name; 0 if pool full   */
 };
 
 #endif /* LPANEL_H */

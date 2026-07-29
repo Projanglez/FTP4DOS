@@ -43,6 +43,15 @@
  * the app-level retry (perform_connect) sends a fresh SYN. mTCP's own SYN
  * retry only kicks in after ~10s - too late for that purpose. */
 #define CONNECT_TIMEOUT_MS  5000ul
+/* Cancel path. Both are quiet windows, not fixed waits: they end as soon as
+ * the peer stops sending. The old code burned a flat 3 s draining plus a
+ * blocking close() that always ran to TCP_CLOSE_TIMEOUT (10 s), which is how
+ * cancelling a download came to freeze the progress dialog for ~20 s. */
+#define ABORT_QUIET_MS       300ul   /* no more data -> the abort has landed */
+#define ABORT_CLOSE_MS      1500ul   /* cap on the FIN exchange              */
+/* How often the transfer loop polls the progress callback (= the keyboard)
+ * when no data is arriving, so ESC still works on a stalled transfer. */
+#define CB_POLL_MS           200ul
 #define CONTROL_RECV_SIZE    1024
 #define DATA_RECV_SIZE      16384   /* mTCP maximum; large receive window      */
 /* Read block size for the LIST data connection (goes to memory, uncritical). */
@@ -65,6 +74,30 @@ static uint16_t g_tcpBufSize  = DATA_RECV_SIZE;    /* data socket recv buffer */
 static uint16_t g_fileBufSize = FILE_BUF_DEFAULT;  /* file transfer buffer    */
 static uint8_t *g_fileBuf     = 0;                 /* allocated in init_stack */
 
+/* Chunk size of a single disk write; configurable via FTP4DOS_DISK_SLICE so
+ * it can be bisected on real hardware (see init_stack). */
+#define DISK_SLICE_DEFAULT 4096u
+#define DISK_SLICE_MAX    16384UL
+static uint16_t g_diskSlice = DISK_SLICE_DEFAULT;
+
+/* --- Transfer sampler (diagnostics, off unless configured) ----------------
+ * Writes one CSV line per second to the file named by FTP4DOS_XFERLOG in
+ * MTCP.CFG. mTCP's own tracing (SET DEBUGGING / SET LOGFILE) reports totals
+ * for the whole run, which cannot show WHEN a transfer stalls - and the
+ * problem reported from real hardware is a periodic burst/stall pattern, so
+ * the shape over time is the evidence. Per-segment TCP tracing would show it
+ * but writes a line per packet to the same slow disk and thereby changes the
+ * very timing under test; one line per second does not. */
+#define XFERLOG_INTERVAL_MS 1000ul
+static char  g_xferLogPath[64] = "";
+static FILE *g_xferLog  = 0;
+static unsigned long g_xlRecv;      /* recv() calls that returned data      */
+static unsigned long g_xlIdle;      /* passes that found nothing to read    */
+static unsigned long g_xlFlush;     /* buffer flushes (disk writes)         */
+static unsigned long g_xlPrev;      /* byte count at the previous sample    */
+static clockTicks_t  g_xlStart;
+static clockTicks_t  g_xlLast;
+
 static uint16_t nextLocalPort(void) {
     uint16_t p = g_nextLocalPort++;
     if (g_nextLocalPort >= 32000) g_nextLocalPort = 4096;
@@ -83,9 +116,64 @@ static unsigned long elapsedMs(clockTicks_t start) {
     return (unsigned long)Timer_diff(start, TIMER_GET_CURRENT()) * TIMER_TICK_LEN;
 }
 
+/* --- Transfer sampler --------------------------------------------------- */
+
+/* Start sampling one transfer. Does nothing unless FTP4DOS_XFERLOG is set.
+ * The file is appended to, so several transfers end up in one log. */
+static void xferLogOpen(const char *what, const char *name, unsigned long size)
+{
+    if (g_xferLogPath[0] == '\0') return;
+    g_xferLog = fopen(g_xferLogPath, "a");
+    g_xlRecv = g_xlIdle = g_xlFlush = g_xlPrev = 0;
+    g_xlStart = g_xlLast = TIMER_GET_CURRENT();
+    if (!g_xferLog) return;
+    fprintf(g_xferLog,
+            "\n# %s %s (%lu bytes) tcpbuf=%u filebuf=%u slice=%u\n"
+            "# sec,total,delta,recv,idle,flush,buffill\n",
+            what, name, size, g_tcpBufSize, g_fileBufSize, g_diskSlice);
+    fflush(g_xferLog);
+}
+
+/* Emit one sample if the interval has elapsed. Called from the transfer loop,
+ * which already polls on a timer, so this costs a tick comparison per pass. */
+static void xferLogSample(unsigned long total, unsigned bufUsed)
+{
+    unsigned long ms;
+    if (!g_xferLog) return;
+    ms = elapsedMs(g_xlLast);
+    if (ms < XFERLOG_INTERVAL_MS) return;
+    g_xlLast = TIMER_GET_CURRENT();
+    fprintf(g_xferLog, "%lu.%02lu,%lu,%lu,%lu,%lu,%lu,%u\n",
+            elapsedMs(g_xlStart) / 1000ul, (elapsedMs(g_xlStart) % 1000ul) / 10ul,
+            total, total - g_xlPrev,
+            g_xlRecv, g_xlIdle, g_xlFlush, bufUsed);
+    /* Flush every line: if the transfer hangs hard enough to need a reboot,
+     * the log up to that point is what we get to look at. */
+    fflush(g_xferLog);
+    g_xlPrev  = total;
+    g_xlRecv  = g_xlIdle = g_xlFlush = 0;
+}
+
+static void xferLogClose(unsigned long total, int ioerr)
+{
+    if (!g_xferLog) return;
+    fprintf(g_xferLog, "# done after %lums, %lu bytes, ioerr=%d\n",
+            elapsedMs(g_xlStart), total, ioerr);
+    fclose(g_xferLog);
+    g_xferLog = 0;
+}
+
 /* Accumulation state for the file transfer buffer. Shared between the
  * readReply() drain hook and the main transfer loop in retr(), so the fill
- * offset stays consistent across both. */
+ * offset stays consistent across both.
+ *
+ * NOTE (v1.0.1): this was briefly reworked into a ring buffer that refilled
+ * from the socket between disk-write slices, the idea being that freed space
+ * reopens the TCP receive window mid-flush. Measured in the QEMU test VM it
+ * was catastrophic - a 5 MB download went from under 4 s to an ETA of over
+ * 4 minutes (~70x slower), because a nearly-full ring hands recv() tiny
+ * fragments and each of those costs a pure ACK. The proven linear buffer is
+ * back; do not reintroduce the ring without measuring a full download first. */
 struct XferBuf {
     uint8_t  *buf;      /* g_fileBuf                          */
     uint16_t  size;     /* g_fileBufSize                      */
@@ -100,16 +188,15 @@ struct XferBuf {
  * window updates flowing while the disk works; 4 KB per slice keeps the
  * large-block write advantage (see FILE_BUF_* above).
  * Returns 0 on success, -1 on write error. */
-#define DISK_SLICE 4096u
-
 static int flushXferBuf(XferBuf *xb, FILE *f) {
     uint16_t off = 0;
     while (off < xb->used) {
         uint16_t n = (uint16_t)(xb->used - off);
-        if (n > DISK_SLICE) n = DISK_SLICE;
+        if (n > g_diskSlice) n = g_diskSlice;
         if (fwrite(xb->buf + off, 1, (size_t)n, f) != (size_t)n)
             return -1;
         off += n;
+        g_xlFlush++;
         driveStack();
     }
     xb->used = 0;
@@ -145,15 +232,32 @@ static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
         if (n <= 0) break;
         xb->used += (uint16_t)n;
         *total += (unsigned long)n;
+        g_xlRecv++;
         got = 1;
     }
+    if (!got) g_xlIdle++;
     if (n < 0) return -2;
     return got;
 }
 
+/* Swallow whatever the data connection still holds and throw it away.
+ * recv() is what reopens a zero receive window - mTCP re-announces only when
+ * the application reads out of the null state - so this is what lets an
+ * aborting server flush its pipeline and send its FIN. Without it the close
+ * below has nothing to wait for and burns TCP_CLOSE_TIMEOUT.
+ * Returns 1 if anything was read. */
+static int drainDiscard(TcpSocket *ds) {
+    int got = 0;
+    if (!ds) return 0;
+    while (ds->recv(g_fileBuf, g_fileBufSize) > 0) got = 1;
+    return got;
+}
+
 /* Context for draining the data connection WHILE readReply() is waiting for
- * the RETR "150" reply - so the receive buffer doesn't fill up right at the
- * start of the transfer (otherwise a one-time stall, see drainToFile). */
+ * a control reply. Two uses:
+ *   f != 0 - RETR "150": received data is kept (see drainToFile), so the
+ *            receive buffer doesn't fill up at the start of the transfer.
+ *   f == 0 - after ABOR: data is discarded, we only need the window open. */
 struct DrainCtx {
     TcpSocket     *ds;
     FILE          *f;
@@ -203,6 +307,17 @@ int FtpClient::init_stack(void) {
                                TCP_BUF_MAX, DATA_RECV_SIZE);
     g_fileBufSize = cfgBufSize("FTP4DOS_FILE_BUFFER", "FTP_FILE_BUFFER",
                                FILE_BUF_MAX, FILE_BUF_DEFAULT);
+    /* Chunk size of a single disk write during a download. Smaller reopens
+     * the receive window sooner on a slow drive, larger writes more
+     * efficiently; exposed so it can be bisected on real hardware. */
+    g_diskSlice   = cfgBufSize("FTP4DOS_DISK_SLICE", "FTP4DOS_DISK_SLICE",
+                               DISK_SLICE_MAX, DISK_SLICE_DEFAULT);
+    /* Diagnostics: path for the per-second transfer log (empty = disabled).
+     * Unlike mTCP's DEBUGGING/LOGFILE tracing this samples on a timer instead
+     * of per packet, so it can be left on for a full-size transfer. */
+    if (Utils::getAppValue((char *)"FTP4DOS_XFERLOG", g_xferLogPath,
+                           sizeof(g_xferLogPath)) != 0)
+        g_xferLogPath[0] = '\0';
     {
         /* Codepage for UTF-8 name conversion: default = active DOS CP
          * (INT 21h AX=6601h), overridable via FTP4DOS_CODEPAGE. */
@@ -260,6 +375,9 @@ FtpClient::FtpClient() {
     pasvPort = 0;
     serverUtf8 = 0;
     replySawUtf8 = 0;
+    serverMlsd = 0;
+    replySawMlsd = 0;
+    lastListMlsd = 0;
 }
 
 void FtpClient::setError(const char *msg) {
@@ -323,13 +441,18 @@ void FtpClient::flushStaleCtrl(void) {
  * server replies is ambiguous (e.g. a completion 226 racing our ABOR):
  * eating everything within the quiet window resynchronizes the control
  * connection before the next command. */
-void FtpClient::drainReplies(unsigned quietMs) {
-    TcpSocket *s = (TcpSocket *)ctrl;
+void FtpClient::drainReplies(unsigned quietMs, void *dataSock) {
+    TcpSocket *s  = (TcpSocket *)ctrl;
+    TcpSocket *ds = (TcpSocket *)dataSock;
     uint8_t tmp[64];
     if (!s) return;
     clockTicks_t start = TIMER_GET_CURRENT();
     while (elapsedMs(start) < (unsigned long)quietMs) {
         driveStack();
+        /* Keep the data connection moving too: leaving it unread here is what
+         * let its window shut while we waited, so the server could not flush
+         * and close (see closeDataDraining). */
+        drainDiscard(ds);
         int16_t n = s->recv(tmp, sizeof(tmp));
         if (n > 0) start = TIMER_GET_CURRENT();
         else if (n < 0) break;
@@ -378,12 +501,17 @@ int FtpClient::readReply(void *drainCtxv) {
     uint8_t ch;
 
     replySawUtf8 = 0;
+    replySawMlsd = 0;
 
     for (;;) {
         driveStack();
         if (dc) {
-            int dr = drainToFile(dc->ds, dc->f, dc->xb, dc->total);
-            if (dr == -1) dc->err = 1;
+            if (dc->f) {
+                int dr = drainToFile(dc->ds, dc->f, dc->xb, dc->total);
+                if (dr == -1) dc->err = 1;
+            } else {
+                drainDiscard(dc->ds);   /* abort path: keep the window open */
+            }
         }
         int16_t n = s->recv(&ch, 1);
 
@@ -395,6 +523,14 @@ int FtpClient::readReply(void *drainCtxv) {
 
                 /* FEAT feature detection (consumed by probeUtf8 only). */
                 if (strstr(line, "UTF8")) replySawUtf8 = 1;
+                /* RFC 3659 7.8: the feature line is "MLST <facts>" and it
+                 * announces BOTH MLST and MLSD - there is no separate MLSD
+                 * line. Looking for "MLSD" here found nothing on any
+                 * standards-conforming server (verified against pyftpdlib,
+                 * whose FEAT lists " MLST type*;perm*;size*;modify*;"), so
+                 * MLSD was never used. Accept either spelling. */
+                if (strstr(line, "MLST") || strstr(line, "MLSD"))
+                    replySawMlsd = 1;
 
                 int haveCode = (len >= 3 &&
                                 isdigit((unsigned char)line[0]) &&
@@ -517,6 +653,31 @@ void FtpClient::closeData(void *dataSock) {
     TcpSocketMgr::freeSocket(d);
 }
 
+/* Bounded close for the cancel path.
+ * TcpSocket::close() spins on isCloseDone() driving packets, but it never
+ * calls recv(). After an aborted download our receive buffer is still full,
+ * so the window stays shut, the server cannot push out what it has queued,
+ * and it therefore never sends the FIN close() is waiting for: the call ran
+ * to TCP_CLOSE_TIMEOUT (10 s, ncftp.cfg) every single time. Draining while
+ * we wait lets the FIN arrive in about one round trip. */
+void FtpClient::closeDataDraining(void *dataSock, unsigned maxMs) {
+    if (!dataSock) return;
+    TcpSocket *d = (TcpSocket *)dataSock;
+    clockTicks_t t0 = TIMER_GET_CURRENT();
+    int done = 0;
+
+    d->closeNonblocking();
+    while (!(done = d->isCloseDone()) && elapsedMs(t0) < (unsigned long)maxMs) {
+        driveStack();
+        drainDiscard(d);
+    }
+    /* Still up after maxMs: hand it to the blocking close so mTCP tears it
+     * down properly - isCloseDone() only calls destroy() once its own timeout
+     * expires, and freeSocket() must never see a live socket. */
+    if (!done) d->close();
+    TcpSocketMgr::freeSocket(d);
+}
+
 
 /* ===================================================================== */
 /* UTF-8 file names (RFC 2640)                                           */
@@ -528,9 +689,15 @@ void FtpClient::closeData(void *dataSock) {
  * Errors are ignored entirely - this must never break the login. */
 void FtpClient::probeUtf8(void) {
     serverUtf8 = 0;
+    serverMlsd = 0;
     if (sendCmd("FEAT") != FTP_OK) return;
     int code = readReply();
-    if (code != 211 || !replySawUtf8) return;
+    if (code != 211) return;
+    /* MLSD in the feature list: use it for listings instead of LIST. It gives
+     * a real modification time (LIST's "ls -l" drops the time for anything
+     * older than ~6 months) and an unambiguous file name. */
+    serverMlsd = replySawMlsd ? 1 : 0;
+    if (!replySawUtf8) return;
     if (sendCmdArg("OPTS", "UTF8 ON") == FTP_OK)
         readReply();                          /* 200/202 or a refusal */
     serverUtf8 = 1;
@@ -689,15 +856,30 @@ int FtpClient::idle_drive(void) {
 /* Directory listing                                                     */
 /* ===================================================================== */
 
+/* Preferred path: MLSD when the server offers it, LIST otherwise. A server
+ * that advertises MLSD in FEAT but then refuses the command is not rare, so
+ * one refusal drops us back to LIST permanently for this connection. */
 int FtpClient::list(const char *path, FtpLineCb cb, void *ctx) {
+    int rc = listOnce(path, cb, ctx, serverMlsd);
+    if (rc == FTP_ERR_NOTSUPP) {
+        serverMlsd = 0;
+        rc = listOnce(path, cb, ctx, 0);
+    }
+    return rc;
+}
+
+int FtpClient::listOnce(const char *path, FtpLineCb cb, void *ctx, int useMlsd) {
     if (!is_connected()) { setError(L("Not connected", "Nicht verbunden")); return FTP_ERR_GENERAL; }
+
+    const char *verb = useMlsd ? "MLSD" : "LIST";
+    lastListMlsd = (unsigned char)(useMlsd ? 1 : 0);
 
     void *d = 0;
     state = FTP_LISTING;
     int rc = openDataConn(&d);
     if (rc != FTP_OK) { state = FTP_IDLE; return rc; }
 
-    rc = (path && path[0]) ? sendCmdArg("LIST", path) : sendCmd("LIST");
+    rc = (path && path[0]) ? sendCmdArg(verb, path) : sendCmd(verb);
     if (rc != FTP_OK) { closeData(d); state = FTP_IDLE; return rc; }
 
     int code = readReply();                 /* 150 / 125 expected */
@@ -705,6 +887,9 @@ int FtpClient::list(const char *path, FtpLineCb cb, void *ctx) {
     if (code != 150 && code != 125) {
         closeData(d); state = FTP_IDLE;
         if (code == 226 || code == 250) return FTP_OK;   /* empty listing */
+        /* MLSD advertised but rejected: let the caller retry with LIST
+         * instead of surfacing an error the user cannot act on. */
+        if (useMlsd && code >= 400) return FTP_ERR_NOTSUPP;
         setErrorReply(L("LIST refused", "LIST abgelehnt"));
         return (code >= 400) ? FTP_ERR_SERVER : FTP_ERR_PROTO;
     }
@@ -746,7 +931,11 @@ int FtpClient::list(const char *path, FtpLineCb cb, void *ctx) {
     code = readReply();                     /* completion 226 */
     state = FTP_IDLE;
     if (code < 0) return code;
-    if (code >= 400) { setErrorReply(L("LIST incomplete", "LIST unvollst" ae "ndig")); return FTP_ERR_SERVER; }
+    if (code >= 400) {
+        if (useMlsd) return FTP_ERR_NOTSUPP;    /* retry the whole thing as LIST */
+        setErrorReply(L("LIST incomplete", "LIST unvollst" ae "ndig"));
+        return FTP_ERR_SERVER;
+    }
     return FTP_OK;
 }
 
@@ -857,6 +1046,9 @@ int FtpClient::retr(const char *remote, const char *localpath,
     }
 
     clockTicks_t start = TIMER_GET_CURRENT();
+    clockTicks_t lastCb = start;
+
+    xferLogOpen("RETR", remote, filesize);
 
     while (!ioerr) {
         int dr;
@@ -865,8 +1057,14 @@ int FtpClient::retr(const char *remote, const char *localpath,
          * open so the server doesn't stall due to Silly Window Syndrome. */
         dr = drainToFile(ds, f, &xb, &total);
         if (dr == -1) { ioerr = 1; break; }
-        if (dr > 0) {
-            start = TIMER_GET_CURRENT();
+        if (dr > 0) start = TIMER_GET_CURRENT();
+        xferLogSample(total, xb.used);
+        /* Poll the callback on data AND on a timer. Calling it only when
+         * bytes arrived meant a stalled transfer never polled the keyboard
+         * at all: ESC did nothing until the data resumed or the 60 s timeout
+         * fired - the other half of "cancel takes forever". */
+        if (dr > 0 || elapsedMs(lastCb) >= CB_POLL_MS) {
+            lastCb = TIMER_GET_CURRENT();
             if (cb && cb(ctx, total, filesize)) { ioerr = 3; break; }  /* user abort */
         }
         if (dr == -2) break;
@@ -874,37 +1072,44 @@ int FtpClient::retr(const char *remote, const char *localpath,
         if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
     }
 
+    xferLogClose(total, ioerr);
+
     /* Write out the remaining partial buffer (skipped on abort: the file
      * is discarded anyway). */
     if (ioerr != 3 && flushXferBuf(&xb, f) != 0) ioerr = 1;
 
     fclose(f);
 
-    if (ioerr == 3) {                       /* user abort: drop the partial file */
-        lfn_remove(localpath);
+    if (ioerr == 3) {                       /* user abort */
         /* ABOR while the data connection is still open (mirrors stor()):
          * closing first sends a graceful FIN that cannot complete while the
-         * server is still streaming, so the blocking close() spins for the
-         * full TCP_CLOSE_TIMEOUT (10 s) with the progress dialog frozen on
-         * screen. With ABOR first the server aborts deterministically
+         * server is still streaming. The server then aborts deterministically
          * (426 transfer aborted, then 226 ABOR ok). */
         sendCmd("ABOR");
-        /* Discard the in-flight data so the server can flush its pipeline
-         * and close its side (a FIN needs send window too); closeData()
-         * below then completes immediately instead of hitting the timeout. */
-        {
-            clockTicks_t t0 = TIMER_GET_CURRENT();
-            while (elapsedMs(t0) < 3000ul) {
-                driveStack();
-                if (ds->recv(g_fileBuf, g_fileBufSize) < 0) break;
-                if (ds->isRemoteClosed() && !ds->recvDataWaiting()) break;
-            }
-        }
+
+        /* Hand the receive side to mTCP. With SHUT_RD it acknowledges and
+         * discards incoming data inside processPacketData(), so our window
+         * never shuts and the server can flush its pipeline and send its FIN
+         * without the application draining byte by byte.
+         * That draining is what made cancelling slow: measured in the QEMU
+         * test VM, the previous version held the progress dialog for ~10.9 s
+         * because every wait below re-filled the receive buffer, the window
+         * closed again, and the final close() ran to its timeout. */
+        ds->shutdown(TCP_SHUT_RD);
+
         code = readReply();                 /* 426 (aborted) or 226/225 */
         if (code == 426) readReply();       /* usually followed by 226   */
-        drainReplies(500);                  /* completion may race the ABOR reply */
-        closeData(d);
+        drainReplies(ABORT_QUIET_MS);       /* completion may race the ABOR */
+
+        closeDataDraining(d, ABORT_CLOSE_MS);
         state = FTP_IDLE;
+
+        /* Drop the partial file LAST. Deleting several megabytes on a slow
+         * FAT volume blocks for a noticeable time and nothing drives the
+         * stack meanwhile; doing it before the ABOR (as this used to) let the
+         * server keep streaming for over a second before it even saw the
+         * abort. */
+        lfn_remove(localpath);
         return FTP_ERR_ABORT;
     }
 
@@ -915,6 +1120,15 @@ int FtpClient::retr(const char *remote, const char *localpath,
      * connection stays in sync for the next command. */
     if (ioerr == 1) { lfn_remove(localpath); drainReplies(500); setError(L("Write error (disk full?)", "Schreibfehler (Platte voll?)")); state = FTP_IDLE; return FTP_ERR_LOCALIO; }
     if (ioerr == 2) { drainReplies(500); setError(L("Download timeout", "Zeit" ue "berschreitung beim Download")); state = FTP_IDLE; return FTP_ERR_TIMEOUT; }
+
+    /* Final progress report. A file that fits in the receive buffer arrives
+     * entirely inside the "150" drain hook, so the transfer loop above can
+     * exit without ever having called cb - the caller then never learns how
+     * many bytes this file contributed. In a recursive copy of many small
+     * files that froze the whole batch accounting (rate, average, total and
+     * ETA all stuck on the last big file). Reported by the user against a
+     * 644-file game directory. */
+    if (cb) cb(ctx, total, filesize ? filesize : total);
 
     code = readReply();                     /* 226 */
     state = FTP_IDLE;
@@ -964,22 +1178,36 @@ int FtpClient::stor(const char *localpath, const char *remote,
     unsigned long sent = 0;
     int ioerr = 0;
 
+    xferLogOpen("STOR", remote, fsize);
+
     for (;;) {
         /* Large read blocks (g_fileBufSize): cheap sequential disk reads;
          * the send loop below slices them into TCP segments anyway. */
         size_t r = fread(g_fileBuf, 1, g_fileBufSize, f);
         if (r == 0) break;
+        g_xlFlush++;                    /* one disk read per pass */
 
         uint16_t off = 0;
-        clockTicks_t start = TIMER_GET_CURRENT();
+        clockTicks_t start  = TIMER_GET_CURRENT();
+        clockTicks_t lastCb = start;
         while (off < r) {
             driveStack();
             int16_t ns = ds->send(g_fileBuf + off, (uint16_t)(r - off));
             if (ns > 0) {
                 off += (uint16_t)ns; start = TIMER_GET_CURRENT();
+                g_xlRecv++;             /* accepted send calls */
             } else if (ns == 0) {
+                g_xlIdle++;             /* send window full */
                 if (elapsedMs(start) > DATA_TIMEOUT_MS) { ioerr = 2; break; }
             } else { ioerr = 3; break; }
+            xferLogSample(sent + off, (unsigned)(r - off));
+            /* Poll the keyboard inside the send loop as well: with a large
+             * file buffer one pass can take seconds on a slow link, and ESC
+             * used to be checked only between whole blocks. */
+            if (elapsedMs(lastCb) >= CB_POLL_MS) {
+                lastCb = TIMER_GET_CURRENT();
+                if (cb && cb(ctx, sent + off, fsize)) { ioerr = 4; break; }
+            }
         }
         if (ioerr) break;
 
@@ -987,6 +1215,8 @@ int FtpClient::stor(const char *localpath, const char *remote,
         if (cb && cb(ctx, sent, fsize)) { ioerr = 4; break; }   /* user abort */
     }
     if (!ioerr && ferror(f)) ioerr = 1;
+
+    xferLogClose(sent, ioerr);
 
     fclose(f);
 
@@ -999,10 +1229,13 @@ int FtpClient::stor(const char *localpath, const char *remote,
          * abort deterministically (426 transfer aborted, then 226 ABOR ok) -
          * mirroring the working RETR abort path. */
         sendCmd("ABOR");
-        closeData(d);                       /* drop our (still-open) data conn */
+        /* Bounded close (see closeDataDraining): the upload direction rarely
+         * hits the 10 s timeout, but there is no reason to risk it here
+         * either now that a drained close exists. */
+        closeDataDraining(d, ABORT_CLOSE_MS);
         code = readReply();                 /* 426 (aborted) or 226/225 */
         if (code == 426) readReply();       /* usually followed by 226   */
-        drainReplies(500);                  /* completion may race the ABOR reply */
+        drainReplies(ABORT_QUIET_MS);       /* completion may race the ABOR reply */
         state = FTP_IDLE;
         return FTP_ERR_ABORT;
     }

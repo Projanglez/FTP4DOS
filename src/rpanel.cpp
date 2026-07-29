@@ -140,25 +140,29 @@ RemotePanel::RemotePanel()
     cwd[0] = '\0';
     navFailed = 0;
     curYear = 1980;
-    namePool = 0;
-    poolUsed = 0;
-    poolSize = 0;
+    namesCut = 0;
+    nameExtAllow = 1;
+    nameExtPref  = 0;
+    names = &nameStore;          /* Panel::materialize() reads through this */
 }
 
-/* Size of the per-listing full-name pool. 512 entries average well under this;
- * if a (pathological) listing overflows it, the extra names simply fall back to
- * their truncated form - no crash, same as the pre-pool behavior. */
-#define REMOTE_NAME_POOL 32768U
-
-char *RemotePanel::pool_store(const char *s)
+/* Norton case convention on the remote side - see the note in rpanel.h.
+ * Only an 8.3 name written entirely without lowercase letters qualifies. */
+int RemotePanel::nc_case(const char *name) const
 {
-    unsigned len = (unsigned)strlen(s) + 1;
-    if (!namePool || poolUsed + len > poolSize) return 0;
-    char *dst = namePool + poolUsed;
-    memcpy(dst, s, len);
-    poolUsed += len;
-    return dst;
+    const char *p;
+    if (!name_is_83(name)) return 0;
+    for (p = name; *p; p++)
+        if (*p >= 'a' && *p <= 'z') return 0;   /* real case: leave it alone */
+    return 1;
 }
+
+/* Bytes to reserve per entry for the full (untruncated) names. Long names
+ * average well under this; whatever still does not fit is flagged per entry
+ * (name_cut) instead of being silently used as a prefix - handing a prefix to
+ * RETR/CWD/DELE is what produced the bogus "550 No such file" reported on
+ * VOGONS against old-dos.ru (2792 entries). */
+#define NAME_BYTES_PER_ENTRY  64L
 
 /* ------------------------------------------------------------------ */
 /* Unix "ls -l" format                                                 */
@@ -206,7 +210,11 @@ static int parse_unix(const char *line, int curYear, PanelEntry *e,
     int year = curYear, hh = 0, mm = 0;
     copy_tok(buf, line, off[m + 2], tlen[m + 2], 23);
     if (tyType == 2) {
+        /* Year form: "ls -l" drops the time for entries older than about six
+         * months, so there IS no time here. Flag it so the panel shows the
+         * year rather than inventing 00:00. */
         year = atoi(buf);
+        e->no_time = 1;
     } else {
         sscanf(buf, "%d:%d", &hh, &mm);
     }
@@ -283,14 +291,107 @@ static int parse_dos(const char *line, PanelEntry *e, char *full, int fullcap)
 }
 
 /* ------------------------------------------------------------------ */
-/* Public parser (Unix or DOS format)                                  */
+/* MLSD format (RFC 3659)                                              */
+/* ------------------------------------------------------------------ */
+
+/* Read exactly n digits; -1 if they are not all digits. */
+static int digits_n(const char *s, int n)
+{
+    int v = 0;
+    while (n-- > 0) {
+        if (!isdigit((unsigned char)*s)) return -1;
+        v = v * 10 + (*s++ - '0');
+    }
+    return v;
+}
+
+/* One MLSD entry line:
+ *   type=file;size=3342636;modify=20221126041011; NAME WITH SPACES.zip
+ *
+ * Facts are semicolon-terminated name=value pairs and a fact value may not
+ * contain a space, so the FIRST space in the line separates the fact list
+ * from the pathname - the name that follows can then contain spaces with no
+ * guesswork at all. That, plus a real timestamp instead of the year "ls -l"
+ * substitutes for old entries, is why MLSD is preferred when the server
+ * offers it. Fact names are case-insensitive.
+ * Returns 1 = usable entry, 0 = skip this line (cdir/pdir or malformed). */
+static int parse_mlsd(const char *line, PanelEntry *e, char *full, int fullcap)
+{
+    const char *sp = strchr(line, ' ');
+    const char *p;
+    int  isDir = 0, skip = 0, haveType = 0;
+    unsigned long size = 0;
+    int  yr = 1980, mo = 1, da = 1, hh = 0, mi = 0, haveMod = 0;
+
+    if (sp == 0 || sp == line || sp[1] == '\0') return 0;
+
+    for (p = line; p < sp; ) {
+        const char *eq   = p;
+        const char *semi;
+        int nlen, vlen;
+        const char *v;
+
+        while (eq  < sp && *eq  != '=' && *eq != ';') eq++;
+        semi = eq;
+        while (semi < sp && *semi != ';') semi++;
+
+        if (eq < sp && *eq == '=') {
+            nlen = (int)(eq - p);
+            v    = eq + 1;
+            vlen = (int)(semi - v);
+            if (nlen == 4 && strnicmp(p, "type", 4) == 0) {
+                haveType = 1;
+                if      (vlen == 3 && strnicmp(v, "dir",  3) == 0) isDir = 1;
+                else if (vlen == 4 && strnicmp(v, "cdir", 4) == 0) skip  = 1;
+                else if (vlen == 4 && strnicmp(v, "pdir", 4) == 0) skip  = 1;
+                else isDir = 0;   /* file, and unknown types (OS.unix=slink)
+                                   * are shown as files - same as "ls -l" */
+            } else if (nlen == 4 && strnicmp(p, "size", 4) == 0) {
+                size = strtoul(v, 0, 10);
+            } else if (nlen == 6 && strnicmp(p, "modify", 6) == 0 && vlen >= 14) {
+                int y2 = digits_n(v, 4),     m2 = digits_n(v + 4, 2);
+                int d2 = digits_n(v + 6, 2), h2 = digits_n(v + 8, 2);
+                int i2 = digits_n(v + 10, 2);
+                if (y2 > 0 && m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= 31 &&
+                    h2 >= 0 && h2 <= 23 && i2 >= 0 && i2 <= 59) {
+                    yr = y2; mo = m2; da = d2; hh = h2; mi = i2;
+                    haveMod = 1;
+                }
+            }
+        }
+        p = (semi < sp) ? semi + 1 : sp;
+    }
+
+    if (!haveType || skip) return 0;
+
+    copy_name(e->name, sp + 1);
+    if (full && fullcap > 0) copy_name_cap(full, sp + 1, fullcap - 1);
+    if (e->name[0] == '\0') return 0;
+
+    e->size      = isDir ? 0UL : size;
+    e->date      = haveMod ? make_date(yr, mo, da) : 0;
+    e->time      = haveMod ? make_time(hh, mi)     : 0;
+    e->no_time   = (unsigned char)(haveMod ? 0 : 1);
+    e->is_dir    = (unsigned char)(isDir ? 1 : 0);
+    e->is_parent = 0;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Public parser (MLSD, Unix or DOS format)                            */
 /* ------------------------------------------------------------------ */
 int ftp_parse_list_line(const char *line, int curYear, PanelEntry *e,
-                        char *full, int fullcap)
+                        char *full, int fullcap, int mlsd)
 {
     e->marked   = 0;
     e->fullname = 0;
+    e->nameref  = NAME_NONE;
+    e->name_cut = 0;
+    e->no_time  = 0;
     if (full && fullcap > 0) full[0] = '\0';
+    /* MLSD lines are never valid "ls -l" lines and vice versa, but the caller
+     * knows which command produced them, so don't guess. */
+    if (mlsd) return parse_mlsd(line, e, full, fullcap);
     if (parse_unix(line, curYear, e, full, fullcap)) return 1;
     if (parse_dos(line, e, full, fullcap))           return 1;
     return 0;
@@ -308,7 +409,10 @@ void RemotePanel::add_line(const char *line)
 {
     PanelEntry tmp;
     char full[FTP_LINE_MAX];
-    if (!ftp_parse_list_line(line, curYear, &tmp, full, (int)sizeof(full)))
+    /* The client knows which command produced these lines - MLSD fact lines
+     * and "ls -l" lines must not be sniffed apart heuristically. */
+    if (!ftp_parse_list_line(line, curYear, &tmp, full, (int)sizeof(full),
+                             ftp ? ftp->listed_mlsd() : 0))
         return;                                                     /* not parseable */
 
     /* Discard "." and ".." from the listing (we add ".." ourselves). */
@@ -322,16 +426,29 @@ void RemotePanel::add_line(const char *line)
     if (cpmap_is_utf8(full)) {
         /* UTF-8 name (RFC 2640): keep the original bytes as the wire name
          * (entry_name() -> RETR/CWD/DELE work on the real server name) and
-         * show the codepage-converted form in the panel. If the pool is
-         * full, fullname stays 0 and the entry degrades to the converted
-         * display name - same fallback as for over-long names. */
-        tmp.fullname = pool_store(full);
+         * show the codepage-converted form in the panel. */
+        tmp.nameref = nameStore.put(full);
         cpmap_utf8_to_cp(full, tmp.name, PANEL_NAME_MAX);
+        if (tmp.nameref == NAME_NONE) tmp.name_cut = 1;
     } else if (strcmp(full, tmp.name) != 0) {
         /* Keep the full name only when it was actually truncated into
          * tmp.name; otherwise tmp.name already is the complete name and
-         * fullname stays 0. */
-        tmp.fullname = pool_store(full);
+         * nameref stays NAME_NONE. */
+        tmp.nameref = nameStore.put(full);
+        if (tmp.nameref == NAME_NONE) tmp.name_cut = 1;
+    }
+
+    /* The arena could not hold this name, so 'name' is only a prefix. Mark it
+     * on screen and remember it for the popup: silently handing the prefix to
+     * RETR/CWD/DELE is what produced the bogus "550 No such file". */
+    if (tmp.name_cut) {
+        namesCut++;
+        if (tmp.name[0] != '\0') {
+            int n = (int)strlen(tmp.name);
+            if (n > PANEL_NAME_MAX - 2) n = PANEL_NAME_MAX - 2;
+            tmp.name[n]     = '>';
+            tmp.name[n + 1] = '\0';
+        }
     }
 
     if (store->append(&tmp)) count++;
@@ -357,12 +474,15 @@ int RemotePanel::refresh()
         return 0;
     }
 
-    /* Full-name pool for entries whose name exceeds PANEL_NAME_MAX. */
-    if (namePool == 0) {
-        namePool = (char *)malloc(REMOTE_NAME_POOL);
-        poolSize = namePool ? REMOTE_NAME_POOL : 0;
-    }
-    poolUsed = 0;
+    /* Arena for the names that exceed PANEL_NAME_MAX, sized for the store's
+     * capacity. With an ExtStore active that is 8000 entries - far more than
+     * a conventional slab can hold - so NameStore puts the arena in XMS/EMS
+     * and only falls back to conventional memory for the small case. Created
+     * once and reused (reset) for every listing. */
+    nameStore.init((long)store->capacity() * NAME_BYTES_PER_ENTRY,
+                   nameExtAllow, nameExtPref);
+    nameStore.reset();
+    namesCut = 0;
 
     /* Determine the current path (for the header). cwd keeps the raw wire
      * bytes (it is used as remote destination path, see Panel::path()); a
@@ -390,7 +510,8 @@ int RemotePanel::refresh()
             strcpy(e.name, "..");
             e.size = 0; e.date = 0; e.time = 0;
             e.is_dir = 1; e.is_parent = 1; e.marked = 0;
-            e.fullname = 0;
+            e.fullname = 0; e.nameref = NAME_NONE;
+            e.name_cut = 0; e.no_time = 0;
             if (store->append(&e)) count++;
         }
     }
