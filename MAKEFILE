@@ -65,6 +65,7 @@ APP_OBJS = &
     src\sites.obj &
     src\entrystore.obj &
     src\extmem.obj &
+    src\namestore.obj &
     src\checksum.obj &
     src\cpmap.obj &
     src\i18n.obj
@@ -117,16 +118,16 @@ src\ncftp.obj: src\ncftp.cpp src\tui.h src\panel.h src\entrystore.h src\extmem.h
 src\tui.obj: src\tui.cpp src\tui.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\panel.obj: src\panel.cpp src\panel.h src\entrystore.h src\tui.h src\i18n.h
+src\panel.obj: src\panel.cpp src\panel.h src\entrystore.h src\namestore.h src\tui.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\tui.h src\lfn.h
+src\lpanel.obj: src\lpanel.cpp src\lpanel.h src\panel.h src\namestore.h src\tui.h src\lfn.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\lfn.obj: src\lfn.cpp src\lfn.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\tui.h src\ftpcli.h src\cpmap.h src\i18n.h
+src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\namestore.h src\tui.h src\ftpcli.h src\cpmap.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg src\cpmap.h src\i18n.h
@@ -154,6 +155,9 @@ src\entrystore.obj: src\entrystore.cpp src\entrystore.h src\panel.h src\extmem.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\extmem.obj: src\extmem.cpp src\extmem.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\namestore.obj: src\namestore.cpp src\namestore.h src\extmem.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
 src\checksum.obj: src\checksum.cpp src\checksum.h

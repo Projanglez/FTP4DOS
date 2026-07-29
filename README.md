@@ -17,7 +17,7 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 - Two panes, Norton Commander style: local DOS filesystem and remote FTP server (passive mode)
 - Per-pane sorting (Alt+F3: name/extension/size/date/time, asc/desc) and pane swap (Ctrl+U)
 - **Search / jump-to-name** and **full-screen pane toggle** for long remote names
-- **Large remote directories**: 512 entries by default; with **`/EXMEM`** the listing is kept in **XMS/EMS memory** for several thousand files
+- **Large remote directories**: listings are kept in **XMS/EMS memory** automatically when that yields more than the 512-entry conventional default, for several thousand files (`/NOEXMEM` opts out)
 
 ### File operations
 
@@ -81,7 +81,7 @@ FTP4DOS.EXE
 ### Command-line parameters
 
 ```
-FTP4DOS [/L:DE|EN] [/H:HOST] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/EXMEM[:XMS|EMS]] [/Q] [/MONO|/COLOR]   (or /?)
+FTP4DOS [/L:DE|EN] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/Q] [/MONO|/COLOR]   (or /?)
 ```
 
 Both `/` and `-` are accepted as the flag prefix. Flags are **case-insensitive**;
@@ -91,6 +91,7 @@ values are passed through as-is (username and password are case-sensitive).
 |-----------|-------------|
 | `/L:DE` / `/L:EN` | Force German or English UI |
 | `/H:HOST` | Connect to HOST automatically on startup |
+| `/LASTCON` | Connect to the last used connection (`FTP4DOS.SAV`) on startup, without the dialog |
 | `/P:PORT` | Port (default 21) |
 | `/U:USER` | Username (default `anonymous`) |
 | `/W:PASS` | Password |
@@ -98,7 +99,9 @@ values are passed through as-is (username and password are case-sensitive).
 | `/S:ALL` | Save connection including password to `FTP4DOS.SAV` (default) |
 | `/S:NOPASS` | Save connection but not the password |
 | `/S:OFF` | Do not save this connection |
-| `/EXMEM` | Store large remote listings in extended/expanded memory (auto: XMS then EMS; force with `/EXMEM:XMS` or `/EXMEM:EMS`) |
+| `/SITES` | Open the site manager directly on startup (takes precedence over `/H:` and `/LASTCON`) |
+| `/EXMEM` | Force a backend for large remote listings in extended/expanded memory (`/EXMEM:XMS` or `/EXMEM:EMS`); plain `/EXMEM` is the automatic default and no longer needed |
+| `/NOEXMEM` | Never use XMS/EMS, stay in conventional memory |
 | `/Q` | Skip the splash screen |
 | `/MONO` | Force monochrome display (MDA/Hercules) |
 | `/COLOR` | Force color display (default: auto-detect) |
@@ -134,6 +137,7 @@ file (`MTCPCFG`):
 | `FTP4DOS_TCP_BUFFER` | 512–16384 | 16384 | TCP receive buffer (window) of the data connection |
 | `FTP4DOS_FILE_BUFFER` | 512–32768 | 8192 | File I/O buffer: received data is written to disk in blocks of this size (uploads read in the same blocks) |
 | `FTP4DOS_CODEPAGE` | 437/850/858/866 | auto | Codepage for UTF-8 file name conversion (default: active DOS codepage) |
+| `FTP4DOS_XFERLOG` | path | off | Diagnostics: writes one line per second during a transfer (elapsed time, bytes total, bytes in the last second, receive/idle/disk-write counts, buffer fill) |
 
 The mTCP FTP client settings `FTP_TCP_BUFFER` / `FTP_FILE_BUFFER` are read
 as fallbacks, so an already tuned `MTCP.CFG` works as-is; the `FTP4DOS_*`

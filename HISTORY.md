@@ -122,3 +122,53 @@ v0.9.6 feedback round on VOGONS — thanks to fly_indiz and ntalaec.
 - **`/SITES` switch**: open the site manager directly on startup
 - Deterministic 8.3 download names, Move+Skip no longer loses files,
   overflow guard for >4 GB counters
+
+## v1.0.1 — 2026-07-29
+
+A bug-fix and minor improvement release for the v1.0.0 feedback round on
+VOGONS — thanks to Yoghoo, ntalaec, Grzyb and fly_indiz.
+
+- **Downloads no longer fail or silently produce 0-byte files on systems
+  with long filename support** (DOSBox-X, MS-DOS 7.x + DOSLFN, Windows 9x
+  DOS): a long-named target was created through the DOS extended-open call
+  and the handle handed to the C library, which does not accept a handle it
+  did not open itself. The long name is now created first and all file I/O
+  goes through its 8.3 alias
+- **Directories with thousands of long file names work in full.** The name
+  buffer was capped at one conventional-memory segment, so past roughly
+  600-1700 entries names were silently shortened to a 39-character prefix —
+  and that prefix went out verbatim in `RETR`/`CWD`/`DELE`, producing a
+  "550 No such file" on entries plainly visible in the pane. Name storage
+  now moves into XMS/EMS along with the entry records; a name that still
+  does not fit is marked `>` and refused up front
+- **Extended memory is used automatically** when available instead of
+  requiring `/EXMEM` — but only when it actually yields more entries than
+  the 512 of the conventional list; `/NOEXMEM` opts out entirely
+- **Recursive copies are no longer limited to 400 entries per directory**
+  (2048 now, stepping down only as far as free conventional memory
+  requires; the message names the limit actually in force)
+- **Cancelling a transfer completes in well under a second** (~0.9 s on a
+  20 MB download) instead of freezing the progress dialog for up to 20
+  seconds
+- **Progress, speed and ETA keep moving during a recursive copy**: small
+  files that arrived in one go never reported their bytes, freezing the
+  display on the last large file. The estimate now also accounts for
+  per-file overhead (`PASV`/`RETR`/`226` round trip, open/close, listing),
+  and directory copies show the total remaining time, not just the
+  per-file one
+- **Real timestamps for remote files** via `MLSD` (RFC 3659), with fallback
+  to `LIST`; `ls -l` omits the time of day for entries older than about six
+  months, which is why archive directories showed `00:00` on every row.
+  Where `LIST` is used, those entries now show the year. Note that `MLSD`
+  reports UTC
+- **`/LASTCON`**: connect straight to the last used connection on startup
+  with no dialog — `FTP4DOS /Q /LASTCON` needs no batch file
+- **Transfer diagnostics**: `FTP4DOS_XFERLOG` in `MTCP.CFG` writes one line
+  per second during a transfer (elapsed, bytes total, bytes in the last
+  second, receive/idle/disk-write counts, buffer fill); off by default
+- The local pane preserves the case of long file names (the Norton
+  uppercase/lowercase convention now applies to genuine 8.3 names only),
+  and 8.3 names on the FTP side are shown lowercase to match
+- Fixes: an empty directory on an LFN system could show no `..` entry; the
+  name buffer could fail to allocate at all with little free conventional
+  memory

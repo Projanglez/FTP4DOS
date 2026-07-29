@@ -31,7 +31,16 @@
 
 #define DC_MAXDEPTH    16
 #define DC_PATHMAX     260
-#define DC_LISTCAP     400     /* max. entries per remote directory level */
+/* Entries per directory level. One level is read into memory in full before
+ * anything is transferred (see the note at the top of this file), so this is
+ * a real ceiling, not a display limit - a game directory with a few hundred
+ * files used to hit the old fixed 400 and abort the whole copy.
+ * dc_init() asks for DC_LISTCAP and halves down to DC_LISTMIN until the far
+ * heap can serve both blocks, so a machine with little conventional memory
+ * still works, just with a lower ceiling. */
+#define DC_LISTCAP    2048     /* entries per level to aim for            */
+#define DC_LISTMIN     256     /* floor before giving up entirely         */
+#define DC_NAMEBYTES    28U    /* name-pool bytes reserved per entry      */
 
 /* ------------------------------------------------------------------ */
 /* Path helpers                                                        */
@@ -162,13 +171,15 @@ struct DcCollect {
     int      count;
     int      cap;
     int      curYear;
+    /* Client whose listing is being collected (0 for a local scan). Asked in
+     * dc_on_line() for the format of the current listing - listOnce() sets
+     * that flag before the first line arrives, so it is already correct. */
+    FtpClient *ftp;
     int      overflow;         /* an entry did not fit -> level incomplete */
     char    *pool;             /* full-name pool for this level           */
     unsigned poolUsed;
     unsigned poolSize;
 };
-
-#define DC_NAMEPOOL  49152U    /* per-level full-name pool (48 KB)         */
 
 static int dc_current_year(void)
 {
@@ -177,16 +188,34 @@ static int dc_current_year(void)
     return (int)d.year;
 }
 
-/* Allocate a collection (entry array + name pool). 0 = out of memory. */
-static int dc_init(DcCollect *c, int cap)
+/* Allocate a collection (entry array + name pool). Takes the largest level
+ * buffer the far heap will serve, halving from 'cap' down to DC_LISTMIN;
+ * c->cap tells the caller what it actually got. Both blocks go through a
+ * 16-bit malloc, which is what limits a single level.
+ * Returns 0 only if even the floor could not be allocated. */
+static int dc_init(DcCollect *c, int cap, FtpClient *ftp)
 {
-    c->cap = cap; c->count = 0; c->curYear = dc_current_year();
+    c->count = 0; c->curYear = dc_current_year();
+    c->ftp = ftp;
     c->overflow = 0;
-    c->poolSize = DC_NAMEPOOL; c->poolUsed = 0;
-    c->arr  = (DcEnt *)malloc((unsigned)cap * sizeof(DcEnt));
-    c->pool = (char  *)malloc(DC_NAMEPOOL);
-    if (!c->arr || !c->pool) { free(c->arr); free(c->pool); c->arr = 0; c->pool = 0; return 0; }
-    return 1;
+    c->arr = 0; c->pool = 0; c->cap = 0; c->poolSize = 0; c->poolUsed = 0;
+
+    while (cap >= DC_LISTMIN) {
+        unsigned long need = (unsigned long)cap * sizeof(DcEnt);
+        unsigned long pool = (unsigned long)cap * DC_NAMEBYTES;
+        if (need <= 65000UL && pool <= 65000UL) {
+            c->arr  = (DcEnt *)malloc((unsigned)need);
+            c->pool = (char  *)malloc((unsigned)pool);
+            if (c->arr && c->pool) {
+                c->cap      = cap;
+                c->poolSize = (unsigned)pool;
+                return 1;
+            }
+            free(c->arr); free(c->pool); c->arr = 0; c->pool = 0;
+        }
+        cap >>= 1;
+    }
+    return 0;
 }
 
 static void dc_free(DcCollect *c)
@@ -219,17 +248,24 @@ static void dc_on_line(void *vctx, const char *line)
     PanelEntry e;
     char full[FTP_LINE_MAX];
 
-    if (!ftp_parse_list_line(line, c->curYear, &e, full, (int)sizeof(full))) return;
+    if (!ftp_parse_list_line(line, c->curYear, &e, full, (int)sizeof(full),
+                             c->ftp ? c->ftp->listed_mlsd() : 0)) return;
     if (full[0] == '\0' || is_dot_dir(full)) return;
     dc_add(c, full, e.is_dir, e.is_dir ? 0UL : e.size);
 }
 
-/* Error text when a level exceeded DC_LISTCAP / the name pool: download and
- * measure must fail loudly instead of silently copying a partial tree. */
-static void set_overflow_error(FtpClient *ftp)
+/* Error text when a level exceeded the level buffer: download and measure
+ * must fail loudly instead of silently copying a partial tree. Reports the
+ * capacity actually obtained, which depends on the free conventional memory
+ * (see dc_init) - a fixed number in the message would be a lie. */
+static void set_overflow_error(FtpClient *ftp, const DcCollect *c)
 {
-    ftp->set_error(L("Remote directory too large (max. 400 entries per directory)",
-                     "Remote-Verzeichnis zu gro" ss " (max. 400 Eintr" ae "ge pro Verzeichnis)"));
+    char msg[100];
+    sprintf(msg, L("Directory too large: only %d entries per directory\nfit in memory.",
+                   "Verzeichnis zu gro" ss ": nur %d Eintr" ae "ge pro Verzeichnis\n"
+                   "passen in den Speicher."),
+            c ? c->cap : 0);
+    ftp->set_error(msg);
 }
 
 /* Subdirectory names of a level, preserved compactly so the big level buffer
@@ -442,13 +478,13 @@ static int download_recurse(FtpClient *ftp, const char *remoteDir,
     lfn_mkdir(localDir);
 
     /* --- 1) read in the entire level --- */
-    if (!dc_init(&col, DC_LISTCAP)) return FTP_ERR_LOCALIO;
+    if (!dc_init(&col, DC_LISTCAP, ftp)) return FTP_ERR_LOCALIO;
 
     result = ftp->list(remoteDir, dc_on_line, &col);
     if (result != FTP_OK) { dc_free(&col); return result; }
     if (col.overflow) {                     /* level incomplete -> fail loudly */
         dc_free(&col);
-        set_overflow_error(ftp);
+        set_overflow_error(ftp, &col);
         return FTP_ERR_GENERAL;
     }
 
@@ -553,13 +589,13 @@ static int measure_remote_recurse(FtpClient *ftp, const char *dir,
 
     if (depth > DC_MAXDEPTH) return FTP_ERR_GENERAL;
 
-    if (!dc_init(&col, DC_LISTCAP)) return FTP_ERR_LOCALIO;
+    if (!dc_init(&col, DC_LISTCAP, ftp)) return FTP_ERR_LOCALIO;
 
     rc = ftp->list(dir, dc_on_line, &col);
     if (rc != FTP_OK) { dc_free(&col); return rc; }
     if (col.overflow) {                     /* count would be wrong -> fail */
         dc_free(&col);
-        set_overflow_error(ftp);
+        set_overflow_error(ftp, &col);
         return FTP_ERR_GENERAL;
     }
 
@@ -601,8 +637,9 @@ static int delete_local_recurse(const char *dir, const char *leaf, int depth,
 
     if (depth > DC_MAXDEPTH) return FTP_ERR_GENERAL;
 
-    /* --- collect the level (collect-then-delete: safe against findnext) --- */
-    if (!dc_init(&col, DC_LISTCAP)) return FTP_ERR_LOCALIO;
+    /* --- collect the level (collect-then-delete: safe against findnext) ---
+     * Local scan: no FTP client, entries come from _dos_findfirst. */
+    if (!dc_init(&col, DC_LISTCAP, 0)) return FTP_ERR_LOCALIO;
 
     join_local(pat, (int)sizeof(pat), dir, "*.*");
     rc = _dos_findfirst(pat, DC_AMASK, &ff);
@@ -656,7 +693,7 @@ static int delete_remote_recurse(FtpClient *ftp, const char *dir, const char *le
 
     if (depth > DC_MAXDEPTH) return FTP_ERR_GENERAL;
 
-    if (!dc_init(&col, DC_LISTCAP)) return FTP_ERR_LOCALIO;
+    if (!dc_init(&col, DC_LISTCAP, ftp)) return FTP_ERR_LOCALIO;
 
     rc = ftp->list(dir, dc_on_line, &col);
     if (rc != FTP_OK) { dc_free(&col); return rc; }

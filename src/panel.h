@@ -18,6 +18,8 @@
 #ifndef PANEL_H
 #define PANEL_H
 
+#include "namestore.h"    /* NameStore, NAME_NONE, NAME_STORE_MAX */
+
 #define PANEL_NAME_MAX    40   /* holds local 8.3 AND longer FTP names        */
 #define PANEL_MAX_ENTRIES 512  /* fixed conventional buffer (default storage) */
 #define PANEL_HEADER_MAX  80   /* path/title line (DOS path max. ~64+drive)   */
@@ -30,10 +32,18 @@
 /* A directory entry (POD - re-sortable via qsort). */
 struct PanelEntry {
     char          name[PANEL_NAME_MAX];
-    /* Full (untruncated) name for entries whose real name exceeds 'name'.
-     * Points into the owning panel's name pool (RemotePanel); 0 when the
-     * name already fits in 'name' (always so for the local 8.3 panel). The
-     * pool is stable across qsort, so this pointer survives sorting. */
+    /* Handle of the full (untruncated) name in the owning panel's NameStore,
+     * or NAME_NONE when 'name' already IS the complete name. This is the form
+     * that survives being stored: with /EXMEM the records themselves live in
+     * XMS/EMS, where a conventional pointer would be meaningless, and the
+     * name arena moved there with them (see namestore.h).
+     * Sorting only ever compares 'name', so a handle is enough. */
+    long          nameref;
+    /* Materialized form of 'nameref', or 0. Filled in by the panel when it
+     * hands an entry out through selected()/entry_at(), so entry_name() keeps
+     * returning a plain string to every caller. It points into a buffer owned
+     * by that panel and is therefore ONLY valid on those transient records -
+     * never on a record that was appended to the store. */
     char         *fullname;
     unsigned long size;       /* size in bytes (0 for directories)            */
     unsigned      date;       /* DOS date word (bits: YYYYYYY MMMM DDDDD)     */
@@ -41,6 +51,17 @@ struct PanelEntry {
     unsigned char is_dir;     /* 1 = directory                                */
     unsigned char is_parent;  /* 1 = ".." entry (always sorted first)         */
     unsigned char marked;     /* 1 = marked by the user (Insert key)          */
+    /* 1 = the real name did NOT fit the name pool, so 'name' holds only a cut
+     * prefix and 'fullname' is 0. Such an entry must never be handed to the
+     * server or the filesystem - it would address the wrong file or draw a
+     * misleading 550. Every action refuses it (see name_complete() in
+     * ncftp.cpp) and format_entry() marks it on screen. */
+    unsigned char name_cut;
+    /* 1 = the listing carried a date but no time of day (a Unix "ls -l" line
+     * older than ~6 months prints the year where HH:MM would be). The time
+     * column then shows the year instead of a fabricated 00:00. Always 0 for
+     * MLSD listings and for local files. */
+    unsigned char no_time;
 };
 
 /* The name to use when talking to the server / opening the real file: the full
@@ -50,6 +71,11 @@ inline const char *entry_name(const PanelEntry *e)
 {
     return e->fullname ? e->fullname : e->name;
 }
+
+/* 1 if 'name' is a plain 8.3 short name (which carries no case of its own, so
+ * the Norton UPPER-dir/lower-file convention may be applied to it), 0 for a
+ * long filename, which is displayed verbatim. Defined in panel.cpp. */
+int name_is_83(const char *name);
 
 #include "entrystore.h"   /* EntryStore / ConvStore / ExtStore (needs PanelEntry) */
 
@@ -166,6 +192,16 @@ protected:
     EntryStore *store;
     PanelEntry  selBuf;     /* stable buffer returned by selected()             */
     PanelEntry  atBuf;      /* stable buffer returned by entry_at()             */
+    /* Full names for the two records above, so entry_name() works on them.
+     * Set by the subclass to its own store (0 = no long names at all). */
+    NameStore  *names;
+    char        selName[NAME_STORE_MAX];
+    char        atName[NAME_STORE_MAX];
+    /* Copy e's full name into buf and return it, or 0 when the entry has none
+     * (entry_name() then falls back to e->name). Used both for the two
+     * buffers above and for the scan/draw loops, which read entries through
+     * store->peek() and cannot carry a materialized pointer of their own. */
+    char *materialize(const PanelEntry *e, char *buf, int bufsz) const;
     int        count;       /* number of valid entries              */
     int        total;       /* entries the directory actually had (>= count)    */
     unsigned char truncated;/* 1 = more entries existed than fit                */
@@ -182,15 +218,19 @@ protected:
     int  visible_rows() const;   /* number of visible entry rows           */
     void clamp_scroll();         /* adjust topentry so the cursor is visible */
     void draw_entry_row(int idx);/* redraw just one entry row (idx)        */
-    void format_entry(const PanelEntry *e, char *out, int inner) const;
+    /* 'full' is the materialized full name (materialize(), 0 when the entry
+     * has none) - the draw loops read entries through peek(), which cannot
+     * carry one in the record itself. */
+    void format_entry(const PanelEntry *e, const char *full,
+                      char *out, int inner) const;
     /* Sort the store by the current mode (subclasses call this in refresh()). */
     void sort_entries();
     virtual unsigned char frame_attr() const;  /* border color (overridable) */
-    /* Display case convention: 1 = Norton style (UPPERCASE directories,
-     * lowercase files); 0 = show the name verbatim. The local panel keeps
-     * the Norton convention; the FTP panel overrides this to 0 because Unix
-     * servers are case-sensitive (see RemotePanel). */
-    virtual int nc_case() const;
+    /* Display case convention for one name: 1 = Norton style (UPPERCASE
+     * directories, lowercase files), 0 = show it verbatim. The base (local)
+     * panel applies it to every 8.3 name; RemotePanel narrows it further
+     * because a server name may carry meaningful case (see rpanel.h). */
+    virtual int nc_case(const char *name) const;
 };
 
 #endif /* PANEL_H */

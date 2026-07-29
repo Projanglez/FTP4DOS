@@ -130,6 +130,8 @@ int connsave_load(char *host, int hostsz, char *port, int portsz,
         else if (stricmp(key, "rsortkey")  == 0) { if (ui) ui->rsort_key   = atoi(val); }
         else if (stricmp(key, "rsortdesc") == 0) { if (ui) ui->rsort_desc  = atoi(val) ? 1 : 0; }
         else if (stricmp(key, "rsortsaved")== 0) { if (ui) ui->rsort_saved = atoi(val) ? 1 : 0; }
+        /* Unknown keys are ignored, so a FTP4DOS.SAV written by 1.0.1's
+         * short-lived /SAVEOPT (defsites/defquiet/defnoexmem) still loads. */
     }
 
     fclose(f);

@@ -23,6 +23,7 @@
 #define FTP_ERR_LOCALIO   -8   /* Local file error                       */
 #define FTP_ERR_SERVER    -9   /* Server replied with 4xx/5xx            */
 #define FTP_ERR_ABORT    -10   /* User aborted the operation             */
+#define FTP_ERR_NOTSUPP  -11   /* Command announced but refused (MLSD)   */
 
 
 /* --- States (see CLAUDE.md) --------------------------------------- */
@@ -88,8 +89,15 @@ public:
      * sending anything). Returns 1 = still connected, 0 = just disconnected. */
     int  idle_drive(void);
 
-    /* Fetch a directory listing. Every raw text line -> cb(ctx, line). */
+    /* Fetch a directory listing. Every raw text line -> cb(ctx, line).
+     * Uses MLSD (RFC 3659) when the server announced it in FEAT, otherwise
+     * LIST; a server that announces MLSD but refuses it falls back to LIST
+     * automatically (and is not asked again). */
     int  list(const char *path, FtpLineCb cb, void *ctx);
+    /* Which format the lines of the LAST list() call were in:
+     * 1 = MLSD fact lines, 0 = "ls -l" / DOS LIST output. The panel needs it
+     * to pick the parser - it must not have to guess per line. */
+    int  listed_mlsd(void) const { return lastListMlsd; }
 
     /* Navigation on the server. */
     int  change_dir(const char *path);          /* CWD          */
@@ -136,6 +144,11 @@ private:
     unsigned char serverUtf8;       /* server announced UTF8 in FEAT   */
     unsigned char replySawUtf8;     /* a line of the last reply had "UTF8" */
 
+    /* --- MLSD listings (RFC 3659) --- */
+    unsigned char serverMlsd;       /* server announced MLSD in FEAT       */
+    unsigned char replySawMlsd;     /* a line of the last reply had "MLSD" */
+    unsigned char lastListMlsd;     /* the last list() actually used MLSD  */
+
     /* --- internal helpers (in ftpcli.cpp) --- */
     int  sendCmd(const char *cmd);                  /* appends CRLF     */
     int  sendCmdArg(const char *cmd, const char *arg);
@@ -145,17 +158,28 @@ private:
     int  readReply(void *drainCtx = 0);
     int  openDataConn(void **dataSockOut);          /* PASV + connect   */
     void closeData(void *dataSock);
+    /* Close a data connection while still draining it, bounded by maxMs.
+     * The blocking close() never recv()s, so a shut receive window stops the
+     * server from flushing and sending its FIN - the cancel path then had to
+     * wait out TCP_CLOSE_TIMEOUT. */
+    void closeDataDraining(void *dataSock, unsigned maxMs);
     int  simpleCmd(const char *cmd, const char *arg); /* send + reply  */
     /* Discard bytes already buffered on the control connection (before a
      * new command is sent: anything still unread is a stale reply). */
     void flushStaleCtrl(void);
     /* Discard control input until 'quietMs' pass without new data (resync
-     * after ABOR / timeout, where pending reply counts are ambiguous). */
-    void drainReplies(unsigned quietMs);
+     * after ABOR / timeout, where pending reply counts are ambiguous).
+     * dataSock != 0: keep emptying that data connection at the same time, so
+     * its receive window stays open while we wait. */
+    void drainReplies(unsigned quietMs, void *dataSock = 0);
     void setError(const char *msg);
     void setErrorReply(const char *prefix);
-    /* FEAT probe after login: enables UTF-8 name mode (OPTS UTF8 ON). */
+    /* FEAT probe after login: enables UTF-8 name mode (OPTS UTF8 ON) and
+     * records whether the server offers MLSD. */
     void probeUtf8(void);
+    /* One listing attempt with a chosen command; list() handles the fallback.
+     * Returns FTP_ERR_NOTSUPP when the server rejected MLSD outright. */
+    int  listOnce(const char *path, FtpLineCb cb, void *ctx, int useMlsd);
     /* Encode a LOCAL-origin name (typed / local panel, DOS codepage) as
      * UTF-8 for the server if it is in UTF-8 mode. Server-origin wire
      * names pass through unchanged. Returns 'name' or 'buf'. */

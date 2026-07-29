@@ -9,7 +9,7 @@
  *   - FindFirst/FindNext/FindClose (714Eh/714Fh/71A1h)
  *   - GetCWD (7147h)
  *   - chdir/mkdir/remove/rename (713Bh/7139h/7141h/7156h)
- *   - fopen with create support (716Ch + fdopen)
+ *   - fopen with create support (716Ch creates the name, stdio uses the alias)
  *   - lfn_normalize_path: convert a path to its 8.3 alias so the remaining
  *     plain C library calls keep working (used by join_local)
  * Every wrapper falls back to the C library on non-LFN systems.
@@ -79,9 +79,10 @@ int lfn_getcwd(char *buf, int bufsz);
  * lfn_mkdir / lfn_rename. No-op on non-LFN systems. */
 void lfn_normalize_path(char *path, int pathsz);
 
-/* fopen replacement that can also open/create long-named files (AX=716Ch +
- * fdopen). mode "w..." creates/truncates, anything else opens for reading.
- * Falls back to fopen() on non-LFN systems. */
+/* fopen replacement that can also open/create long-named files. A long name is
+ * created with AX=716Ch and then opened through its 8.3 alias, because stdio
+ * cannot adopt a handle it did not open itself. mode "w..." creates/truncates,
+ * anything else opens for reading. Falls back to fopen() on non-LFN systems. */
 FILE *lfn_fopen(const char *path, const char *mode);
 
 /* chdir/mkdir/remove/rename accepting long paths (713Bh/7139h/7141h/7156h).
