@@ -18,8 +18,9 @@ src/*.obj
 # Release-Pakete (gehoeren in GitHub-Releases, nicht ins Repo)
 *.zip
 
-# Release-Notes-Entwuerfe (Arbeitsstand; veroeffentlicht wird via HISTORY.md
-# und GitHub-Release)
+# Entwuerfe fuer Veroeffentlichungstexte (Release-Notes, Forenbeitraege, ...).
+# Arbeitsstand; veroeffentlicht wird via HISTORY.md, GitHub-Release und Forum.
+drafts/
 RELEASE-NOTES-*.md
 
 # Laufzeitdatei: gemerkte FTP-Verbindung (wird neben der EXE angelegt)
