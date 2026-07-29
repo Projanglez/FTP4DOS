@@ -1233,7 +1233,8 @@ static int panel_names_cut(Panel *p)
 }
 
 /* If the last listing didn't fit the panel's buffer, tell the user (once per
- * listing - refresh() clears the flag). Hint at /EXMEM for more room. */
+ * listing - refresh() clears the flag). XMS/EMS is claimed automatically, so
+ * the only lever left is how much of it is free. */
 static void warn_truncated(Panel *p)
 {
     char msg[260];
@@ -1242,8 +1243,8 @@ static void warn_truncated(Panel *p)
 
     if (p->is_truncated()) {
         sprintf(msg,
-            L("This directory has %d entries; only the\nfirst %d can be shown.\n\nStart with /EXMEM (XMS/EMS) to list them all.",
-              "Dieses Verzeichnis hat %d Eintr" ae "ge; nur die\nersten %d sind anzeigbar.\n\nMit /EXMEM (XMS/EMS) alle anzeigen."),
+            L("This directory has %d entries; only the\nfirst %d can be shown.\n\nMore free XMS/EMS memory raises the limit\n(switched off by /NOEXMEM).",
+              "Dieses Verzeichnis hat %d Eintr" ae "ge; nur die\nersten %d sind anzeigbar.\n\nMehr freier XMS/EMS-Speicher erh" oe "ht das Limit\n(mit /NOEXMEM abgeschaltet)."),
             p->total_count(), p->entry_count());
         dlg_message(L("Directory truncated", "Verzeichnis gek" ue "rzt"), msg, 0);
     }
@@ -1253,9 +1254,10 @@ static void warn_truncated(Panel *p)
      * so once rather than letting the user discover it one 550 at a time. */
     cut = panel_names_cut(p);
     if (cut > 0) {
-        /* Deliberately does NOT suggest /EXMEM: extended memory backs the
-         * ENTRY list and is already used automatically, while the name pool
-         * lives in conventional memory and is capped at one segment. */
+        /* Deliberately does NOT suggest /EXMEM: the name arena follows the
+         * same automatic XMS/EMS policy as the entry list, so there is no
+         * switch left to recommend - a name is cut only when the arena is
+         * full or the name itself exceeds NAME_STORE_MAX. */
         sprintf(msg,
             L("%d entries have names too long to keep in memory.\nThey are marked with '>' and cannot be opened,\ncopied, renamed or deleted.\n\nThe rest of the directory is unaffected.",
               "%d Eintr" ae "ge haben zu lange Namen f" ue "r den Speicher.\nSie sind mit '>' markiert und k" oe "nnen nicht ge" oe "ffnet,\nkopiert, umbenannt oder gel" oe "scht werden.\n\nDer Rest des Verzeichnisses ist nicht betroffen."),
