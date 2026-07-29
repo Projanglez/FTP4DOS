@@ -17,7 +17,7 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 - Two panes, Norton Commander style: local DOS filesystem and remote FTP server (passive mode)
 - Per-pane sorting (Alt+F3: name/extension/size/date/time, asc/desc) and pane swap (Ctrl+U)
 - **Search / jump-to-name** and **full-screen pane toggle** for long remote names
-- **Large remote directories**: listings are kept in **XMS/EMS memory** automatically when that yields more than the 512-entry conventional default, for several thousand files (`/NOEXMEM` opts out)
+- **Large remote directories**: listings are kept in **XMS/EMS memory** automatically, for several thousand files (`/NOEXMEM` opts out)
 
 ### File operations
 
