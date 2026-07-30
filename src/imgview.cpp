@@ -19,7 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <conio.h>     /* kbhit, getch */
+#include <conio.h>     /* kbhit, getch                */
+#include <dos.h>       /* _dos_allocmem, _dos_freemem */
+#include <malloc.h>    /* _heapshrink, _fheapshrink   */
 
 #include "imgview.h"
 #include "imgdec.h"
@@ -28,7 +30,6 @@
 #include "tui.h"
 #include "keymap.h"
 #include "dialog.h"
-#include "assoc.h"    /* assoc_free_kb: the same figure the help screen shows */
 #include "i18n.h"
 #include "umlaut.h"   /* always the last include */
 
@@ -79,6 +80,54 @@ int img_ext_known(const char *ext)
     for (i = 0; known[i]; i++)
         if (stricmp(ext, known[i]) == 0) return 1;
     return 0;
+}
+
+int img_is_image_ext(const char *ext)
+{
+    static const char *img[] = {
+        "bmp", "dib", "jpg", "jpeg", "gif", "pcx", "png",
+        "tif", "tiff", "tga", "lbm", "iff", 0
+    };
+    int i;
+
+    if (ext == 0 || ext[0] == '\0') return 0;
+    for (i = 0; img[i]; i++)
+        if (stricmp(ext, img[i]) == 0) return 1;
+    return 0;
+}
+
+const char *img_ext_of(const char *name)
+{
+    const char *dot = 0;
+    const char *p;
+
+    if (name == 0) return "";
+    for (p = name; *p; p++)
+        if (*p == '.') dot = p;
+    /* A leading dot is part of the name ("...", ".profile"), not an extension. */
+    if (dot == 0 || dot == name || dot[1] == '\0') return "";
+    return dot + 1;
+}
+
+unsigned img_free_kb(void)
+{
+    unsigned seg = 0;
+
+    /* Hand idle heap blocks back to DOS first. Watcom's far heap keeps every
+     * block it has ever taken from DOS - free() only returns it to the heap's
+     * own free list - so without this the figure drops after each viewed file
+     * and never recovers, reporting 0 KB while the memory is in fact still
+     * available. */
+    _heapshrink();
+    _fheapshrink();
+
+    /* The oversized request is meant to fail: DOS then reports the largest
+     * available block, in paragraphs, in 'seg'. */
+    if (_dos_allocmem(0xFFFFu, &seg) != 0)
+        return (unsigned)(((unsigned long)seg * 16UL) / 1024UL);
+
+    _dos_freemem(seg);           /* a full megabyte was actually free */
+    return 1024u;
 }
 
 static ImgDecoder *make_decoder(int fmt)
@@ -439,7 +488,7 @@ static void img_error(int rc)
                        "%u KB free; a picture needs about 100 KB.",
                        "Zu wenig Speicher f" ue "r dieses Bild.\n\n"
                        "%u KB frei; ein Bild braucht etwa 100 KB."),
-                assoc_free_kb());
+                img_free_kb());
         dlg_error(L("Image", "Bild"), buf);
         return;
     }
