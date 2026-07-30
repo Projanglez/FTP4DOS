@@ -33,6 +33,7 @@ RELEASE-NOTES-*.md
 # src/rsakeys.h in die Versionsverwaltung.
 *.pem
 *.key
+*.pass
 ftp4dos-sign-*
 keys/
 

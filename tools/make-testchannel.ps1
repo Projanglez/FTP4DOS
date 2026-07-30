@@ -28,7 +28,8 @@ param(
     [string]$OutDir = "C:\ftp4dos-testchannel",
     [string]$Notes = "test channel - not a real release",
     [int]$Port = 8080,
-    [string]$OpenSsl
+    [string]$OpenSsl,
+    [string]$PassFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,8 +60,10 @@ $inf = Join-Path $OutDir 'UPDATE.INF'
 $sig = Join-Path $OutDir 'UPDATE.SIG'
 [System.IO.File]::WriteAllText($inf, $manifest, (New-Object System.Text.UTF8Encoding $false))
 
-Write-Host "OpenSSL will ask for the key passphrase."
-& $openssl dgst -sha256 -sign $PrivateKey -out $sig $inf
+# Uses the DPAPI-stored passphrase when tools/store-keypass.ps1 has been run for
+# this key; otherwise OpenSSL prompts.
+Invoke-OpenSslWithKey -OpenSslExe $openssl -PrivateKey $PrivateKey -PassFile $PassFile `
+    -Arguments @('dgst', '-sha256', '-sign', $PrivateKey, '-out', $sig, $inf)
 if ($LASTEXITCODE -ne 0) { throw "signing failed" }
 
 # Same check publish-update.ps1 makes: the signature must verify against a key

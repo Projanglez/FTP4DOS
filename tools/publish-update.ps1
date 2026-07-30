@@ -40,6 +40,7 @@ param(
     [string]$Tag,
     [string]$Repo  = "Projanglez/FTP4DOS",
     [string]$OpenSsl,
+    [string]$PassFile,
     [switch]$DryRun
 )
 
@@ -133,7 +134,10 @@ $infPath = Join-Path $outDir "UPDATE.INF"
 $sigPath = Join-Path $outDir "UPDATE.SIG"
 [System.IO.File]::WriteAllText($infPath, $manifest, (New-Object System.Text.UTF8Encoding $false))
 
-& $openssl dgst -sha256 -sign $PrivateKey -out $sigPath $infPath
+# Uses the DPAPI-stored passphrase when tools/store-keypass.ps1 has been run for
+# this key; otherwise OpenSSL prompts, exactly as before.
+Invoke-OpenSslWithKey -OpenSslExe $openssl -PrivateKey $PrivateKey -PassFile $PassFile `
+    -Arguments @('dgst', '-sha256', '-sign', $PrivateKey, '-out', $sigPath, $infPath)
 if ($LASTEXITCODE -ne 0) { throw "signing failed" }
 
 $sigLen = (Get-Item $sigPath).Length
