@@ -130,6 +130,8 @@ int connsave_load(char *host, int hostsz, char *port, int portsz,
         else if (stricmp(key, "rsortkey")  == 0) { if (ui) ui->rsort_key   = atoi(val); }
         else if (stricmp(key, "rsortdesc") == 0) { if (ui) ui->rsort_desc  = atoi(val) ? 1 : 0; }
         else if (stricmp(key, "rsortsaved")== 0) { if (ui) ui->rsort_saved = atoi(val) ? 1 : 0; }
+        else if (stricmp(key, "updcheck")  == 0) { if (ui) ui->updcheck    = atoi(val) ? 1 : 0; }
+        else if (stricmp(key, "updlast")   == 0) { if (ui) ui->updlast     = atol(val); }
         /* Unknown keys are ignored, so a FTP4DOS.SAV written by 1.0.1's
          * short-lived /SAVEOPT (defsites/defquiet/defnoexmem) still loads. */
     }
@@ -174,6 +176,8 @@ void connsave_store(const char *host, const char *port,
         fprintf(f, "rsortkey=%d\n",   ui->rsort_key);
         fprintf(f, "rsortdesc=%d\n",  ui->rsort_desc ? 1 : 0);
         fprintf(f, "rsortsaved=%d\n", ui->rsort_saved ? 1 : 0);
+        fprintf(f, "updcheck=%d\n",   ui->updcheck ? 1 : 0);
+        fprintf(f, "updlast=%ld\n",   ui->updlast);
     }
 
     fclose(f);

@@ -59,6 +59,7 @@
 #define KEY_ALT_F7  0x16E  /* search / jump to the next name with a prefix       */
 #define KEY_ALT_F8  0x16F  /* toggle full-screen for the active panel            */
 #define KEY_ALT_F9  0x170  /* checksum (CRC32 + MD5) of the selected file        */
+#define KEY_ALT_F10 0x171  /* check for updates (next to F10=Quit: exit-adjacent)*/
 
 /* Numpad keys: unused in the panel context, Norton Commander style.
  * Numpad * and + are ASCII and indistinguishable from the like-named keys. */

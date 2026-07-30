@@ -21,6 +21,7 @@
 #include <dos.h>
 #include <ctype.h>
 #include <time.h>
+#include <process.h>   /* execv: relaunch after installing an update */
 
 #include "tui.h"
 #include "panel.h"
@@ -36,11 +37,13 @@
 #include "connsave.h"
 #include "sites.h"
 #include "checksum.h"
+#include "update.h"
+#include "sha256.h"   /* sha256_hex: show the update's hash for cross-checking */
 #include "i18n.h"
 #include "lfn.h"
 #include "umlaut.h"   /* always include last */
 
-#define APP_VERSION "1.0.1"
+#define APP_VERSION "1.1.0"
 
 /* ---- Screen layout ---- */
 #define PANEL_TOP     0
@@ -83,6 +86,10 @@ static int  g_exmem       = 0;   /* /EXMEM was given explicitly (diagnostics) */
 static int  g_noexmem     = 0;   /* /NOEXMEM: never touch XMS/EMS             */
 static int  g_exmem_pref  = 0;   /* 0 auto, 1 XMS, 2 EMS                        */
 static ExtStore *g_extStore = 0; /* remote panel's XMS/EMS store (when /EXMEM)  */
+static int  g_upd_restart = 0;   /* after a staged update: relaunch on exit     */
+static int  g_upd_now     = 0;   /* "install now": leave the event loop at once */
+static int  g_do_update   = 0;   /* /UPDATECHECK: check for updates at startup */
+static int  g_no_update   = 0;   /* /NOUPDATECHECK: skip the auto-check     */
 
 static void warn_truncated(Panel *p);   /* popup when a listing didn't all fit  */
 
@@ -131,11 +138,11 @@ static const char *fkey_alt_label(int i)
 {
     static const char *de[10] = {
         "Laufw", "Detail", "Sort", "", "",
-        "Umben", "Suchen", "Vollb", "Pr" ue "fsum", ""
+        "Umben", "Suchen", "Vollb", "Pr" ue "fsum", "Update"
     };
     static const char *en[10] = {
         "Drive", "Detail", "Sort", "", "",
-        "Rename", "Search", "Full", "ChkSum", ""
+        "Rename", "Search", "Full", "ChkSum", "Update"
     };
     return g_english ? en[i] : de[i];
 }
@@ -1267,6 +1274,250 @@ static void warn_truncated(Panel *p)
 }
 
 /* -------------------------------------------------------------------------
+ * Alt+F10 - Check for updates.
+ *
+ * The whole flow is deliberately opt-in and reversible: nothing is fetched
+ * without the user asking, nothing is installed without a confirmation, and
+ * the swap happens at exit so a half-finished download can never leave the
+ * running program without an executable.
+ *
+ * If the signature does not verify there is no way forward from here - no
+ * "install anyway", no override. On a plain-HTTP channel that escape hatch is
+ * precisely what an attacker would aim for.
+ * ---------------------------------------------------------------------- */
+static void do_update(void)
+{
+    struct UpdInfo ui;
+    CopyCtx cc;
+    char msg[512];
+    char hex[SHA256_HEX_LEN];
+    int rc;
+
+    if (!g_ftp_ready) {
+        dlg_error(L("Update", "Update"),
+                  L("The TCP/IP stack is not running.", "Der TCP/IP-Stack l" ae "uft nicht."));
+        redraw_all();
+        return;
+    }
+
+    /* The check itself gets a progress dialog: the RSA verification alone runs
+     * about 3.5 s on a 386, which without feedback looks like a freeze. The bar
+     * is driven by real work units from inside the modular exponentiation, so
+     * ESC cancels it too. */
+    memset(&cc, 0, sizeof(cc));
+    cc.files_total = 1;
+    cc.files_done  = 1;
+    dlg_progress_begin(L("Update", "Update"), 0);
+    dlg_progress_setfile(L("Checking for updates...", "Suche nach Updates..."), 1, 1);
+    copyctx_batch_start(&cc);
+    copyctx_file_start(&cc);
+    rc = upd_check(APP_VERSION, &ui, copy_progress, &cc);
+    dlg_progress_end();
+    redraw_all();
+
+    if (rc == UPD_ERR_ABORT) {
+        flash_status(L(" Update check cancelled.", " Update-Pr" ue "fung abgebrochen."));
+        return;
+    }
+    if (rc == UPD_ERR_SIG) {
+        /* Deliberately blunt: this is the case that matters. */
+        dlg_error(L("Update refused", "Update abgelehnt"), upd_last_error());
+        redraw_all();
+        return;
+    }
+    if (rc == UPD_ERR_NET || rc == UPD_ERR_PARSE) {
+        dlg_error(L("Update check failed", "Update-Pr" ue "fung fehlgeschlagen"),
+                  upd_last_error());
+        redraw_all();
+        return;
+    }
+    if (rc == UPD_UPTODATE) {
+        sprintf(msg, L("You already have the newest version (%s).",
+                       "Du hast bereits die neueste Version (%s)."), APP_VERSION);
+        dlg_message(L("Update", "Update"), msg, 0);
+        redraw_all();
+        return;
+    }
+
+    /* Label/value rows rather than prose: the two version numbers are the thing
+     * being compared, and side by side they are read at a glance.
+     *
+     * The SHA-256 goes out in full, on its own line. Truncating it to a prefix
+     * made it useless for the one check that does not depend on this program
+     * being honest - comparing it against the release page on another machine.
+     * 64 characters fit: a dialog is at most 76 columns wide (dialog.cpp:110). */
+    sha256_hex(ui.sha256, hex);
+    sprintf(msg,
+            L("Installed version:  %s\n"
+              "Available version:  %s\n"
+              "Date:               %s\n"
+              "Size:               %lu bytes\n"
+              "\nSHA-256:\n%s\n"
+              "\nChanges: %s\n"
+              "\nDownload it now?",
+              "Installierte Version:  %s\n"
+              "Verf" ue "gbare Version:    %s\n"
+              "Datum:                 %s\n"
+              "Gr" oe ss "e:                 %lu Bytes\n"
+              "\nSHA-256:\n%s\n"
+              "\n" Ae "nderungen: %s\n"
+              "\nJetzt herunterladen?"),
+            APP_VERSION, ui.version, ui.date, ui.size, hex,
+            ui.notes[0] ? ui.notes : "-");
+
+    if (!dlg_confirm(L("Update available", "Update verf" ue "gbar"), msg)) {
+        redraw_all();
+        return;
+    }
+
+    /* Two phases, labelled separately. Hashing 270 KB takes seconds on a 386,
+     * and a bar that silently restarts under the same caption reads as a
+     * stall. Both phases stay cancellable via ESC. */
+    dlg_progress_begin(L("Update", "Update"), 0);
+    dlg_progress_setfile("FTP4DOS.EXE", 1, 1);
+    copyctx_batch_start(&cc);
+    copyctx_file_start(&cc);
+    rc = upd_download(&ui, copy_progress, &cc);
+
+    if (rc == UPD_OK) {
+        /* "Checking download", not "checking signature": the signature was
+         * verified on the manifest before any of this started. What happens
+         * here is the SHA-256 comparison against it. */
+        dlg_progress_setfile(L("Checking download...", "Pr" ue "fe Download..."), 1, 1);
+        copyctx_file_start(&cc);
+        rc = upd_verify(&ui, copy_progress, &cc);
+    }
+    dlg_progress_end();
+    redraw_all();
+
+    if (rc == UPD_ERR_ABORT) {
+        upd_discard();
+        flash_status(L(" Update cancelled.", " Update abgebrochen."));
+        return;
+    }
+    if (rc != UPD_OK) {
+        dlg_error(L("Update failed", "Update fehlgeschlagen"), upd_last_error());
+        redraw_all();
+        return;
+    }
+
+    {
+        static const char *const items_en[] = {
+            "Install now and restart",
+            "Install on exit, do not restart",
+            "Do nothing (keep the downloaded file)",
+            "Cancel and delete the downloaded file"
+        };
+        static const char *const items_de[] = {
+            "Sofort installieren und neu starten",
+            "Beim Beenden installieren, nicht neu starten",
+            "Nichts tun (heruntergeladene Datei behalten)",
+            "Abbrechen und heruntergeladene Datei l" oe "schen"
+        };
+        /* L() takes strings, so the array has to be picked directly. */
+        const char *const *items = g_english ? items_en : items_de;
+        int sel = dlg_choice(L("Update ready", "Update bereit"),
+                             L("The new version has been downloaded and its signature verified.",
+                               "Die neue Version wurde geladen und ihre Signatur gepr" ue "ft."),
+                             items, 4);
+
+        if (sel == 3 || sel < 0) {
+            upd_discard();
+            redraw_all();
+            flash_status(L(" Update discarded.", " Update verworfen."));
+            return;
+        }
+        if (sel == 2) {
+            /* Keep the file but cancel the swap, and say where it is - a
+             * message about a file the user cannot find is no use. */
+            const char *p = upd_keep();
+            sprintf(msg, L("The verified file has been kept:\n\n%s\n\n"
+                           "To install it by hand, rename it over FTP4DOS.EXE\n"
+                           "while FTP4DOS is not running.",
+                           "Die gepr" ue "fte Datei wurde behalten:\n\n%s\n\n"
+                           "Zum Installieren von Hand " ue "ber FTP4DOS.EXE umbenennen,\n"
+                           "solange FTP4DOS nicht l" ae "uft."), p);
+            dlg_message(L("Update", "Update"), msg, 0);
+            redraw_all();
+            return;
+        }
+
+        g_upd_restart = (sel == 0) ? 1 : 0;
+
+        if (sel == 0) {
+            /* "Now" means now: end the event loop so the swap - which can only
+             * happen once the stack and the TUI are down - runs immediately,
+             * followed by the exec into the new binary. */
+            g_upd_now = 1;
+            redraw_all();
+            return;
+        }
+    }
+
+    redraw_all();
+    flash_status(L(" Update installs on exit.", " Update wird beim Beenden installiert."));
+}
+
+/* Today as YYYYMMDD, for throttling the auto-check. */
+static long today_stamp(void)
+{
+    struct dosdate_t d;
+    _dos_getdate(&d);
+    return (long)d.year * 10000L + (long)d.month * 100L + (long)d.day;
+}
+
+/* Opt-in startup check. Deliberately modest: it fetches the manifest, verifies
+ * it and says a word in the status line. It never downloads anything and never
+ * opens a dialog - a program that interrupts your start to sell you an upgrade
+ * is a program people switch off.
+ *
+ * The date stamp is written whether or not the check succeeded, so an
+ * unreachable server costs one delayed start a week, not one every time. */
+static void do_update_autocheck(void)
+{
+    struct UpdInfo ui;
+    long today;
+    int rc;
+
+    if (!g_ui.updcheck || g_no_update || !g_ftp_ready) return;
+
+    today = today_stamp();
+    /* Plain difference rather than real date arithmetic: across a month
+     * boundary it just means checking a few days early, which is harmless. */
+    if (g_ui.updlast != 0 && (today - g_ui.updlast) < 7L) return;
+
+    flash_status(L(" Checking for updates...", " Suche nach Updates..."));
+    /* No callback: the opt-in check stays silent by design, so there is no
+     * dialog to drive and nothing to cancel. */
+    rc = upd_check(APP_VERSION, &ui, 0, 0);
+
+    /* Persist the stamp immediately. FTP4DOS.SAV is otherwise only written on
+     * connect, panel swap and sort change - none of which a user who just
+     * starts the program and looks around will trigger, so without this the
+     * throttle would never take effect and the check would run on every start.
+     * /S:OFF still means "write nothing", and then the throttle simply does
+     * not persist - which is the user's explicit choice. */
+    g_ui.updlast = today;
+    if (g_saveconn)
+        connsave_store(g_host, g_portStr, g_user, g_pass, g_savepw, g_swapped, &g_ui);
+
+    if (rc == UPD_OK && ui.newer) {
+        char msg[80];
+        sprintf(msg, L(" Version %s available - press Alt+F10.",
+                       " Version %s verf" ue "gbar - Alt+F10 dr" ue "cken."), ui.version);
+        flash_status(msg);
+    } else if (rc == UPD_ERR_SIG) {
+        /* Worth saying out loud even unattended: it means someone is serving
+         * something that is not ours. */
+        flash_status(L(" Update check: signature invalid!",
+                       " Update-Pr" ue "fung: Signatur ung" ue "ltig!"));
+    } else {
+        /* Anything else (no network, no server) stays quiet on purpose. */
+        draw_statusbar();
+    }
+}
+
+/* -------------------------------------------------------------------------
  * F9 - Refresh: re-read the active panel (e.g. to see a new remote file).
  * ---------------------------------------------------------------------- */
 static void do_refresh(void)
@@ -1835,7 +2086,7 @@ static void print_usage(void)
 {
     printf("FTP4DOS v" APP_VERSION " - Dual-Pane FTP Client for DOS\n");
     printf("(c) 2026 Projanglez -- https://github.com/Projanglez/ftp4dos\n\n");
-    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/Q] [/MONO|/COLOR]\n");
+    printf("Usage: FTP4DOS [/L:EN|DE] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/UPDATECHECK|/NOUPDATECHECK] [/Q] [/MONO|/COLOR]\n");
     printf("       ('-' may be used instead of '/'; flags are case-insensitive)\n\n");
     printf("  /L:EN|DE        force English or German user interface\n");
     printf("  /H:HOST         connect to HOST automatically on startup\n");
@@ -1851,6 +2102,8 @@ static void print_usage(void)
     printf("  /EXMEM          force extended/expanded memory for large remote dirs\n");
     printf("                  (used automatically when available; :XMS or :EMS picks one)\n");
     printf("  /NOEXMEM        never use XMS/EMS, stay in conventional memory\n");
+    printf("  /UPDATECHECK    check for a new version on startup (also Alt+F10)\n");
+    printf("  /NOUPDATECHECK  skip the automatic update check this run\n");
     printf("  /Q              skip splash screen\n");
     printf("  /MONO           force monochrome display (MDA/Hercules)\n");
     printf("  /COLOR          force color display (default: auto-detect)\n");
@@ -1872,6 +2125,7 @@ int main(int argc, char *argv[])
      * g_host etc.; if the file is missing, the defaults remain. */
     connsave_init(argv[0]);
     sites_init(argv[0]);
+    upd_init(argv[0]);      /* FTP4DOS.EXE/.NEW/.BAK next to the running image */
     connsave_load(g_host, (int)sizeof(g_host), g_portStr, (int)sizeof(g_portStr),
                   g_user, (int)sizeof(g_user), g_pass, (int)sizeof(g_pass),
                   &g_savepw, &g_swapped, &g_ui);
@@ -1915,6 +2169,14 @@ int main(int argc, char *argv[])
                 strncpy(g_portStr, val, sizeof(g_portStr) - 1); g_portStr[sizeof(g_portStr) - 1] = 0;
                 break;
             case 'u':
+                /* The dispatch above keys on the first letter only, so
+                 * /UPDATECHECK has to identify itself before /U: reads the
+                 * value. Named for what it does: it checks, it does not
+                 * install - installing always needs a confirmation. */
+                if (strnicmp(o, "updatecheck", 11) == 0 && o[11] == '\0') {
+                    g_do_update = 1;
+                    break;
+                }
                 strncpy(g_user, val, sizeof(g_user) - 1); g_user[sizeof(g_user) - 1] = 0;
                 break;
             case 'w':
@@ -1955,9 +2217,12 @@ int main(int argc, char *argv[])
                 break;
             case 'n':       /* /NOEXMEM : stay in conventional memory */
                 /* The dispatch above keys on the first letter only, so a long
-                 * switch has to verify the rest of the word itself. */
+                 * switch has to verify the rest of the word itself. Two
+                 * switches start with 'n', so both spell themselves out. */
                 if (strnicmp(o, "noexmem", 7) == 0 && o[7] == '\0')
                     g_noexmem = 1;
+                else if (strnicmp(o, "noupdatecheck", 13) == 0 && o[13] == '\0')
+                    g_no_update = 1;
                 break;
             case '?':
                 want_help = 1;
@@ -2084,6 +2349,15 @@ int main(int argc, char *argv[])
                            " FTP nicht verf" ue "gbar (MTCPCFG?)."));
         }
     }
+
+    /* Update handling comes after any auto-connect, so a slow or unreachable
+     * update server never delays the thing the user actually asked for.
+     * /UPDATECHECK is explicit and always runs; the opt-in check is throttled
+     * silent unless it has something to report. */
+    if (g_do_update)
+        do_update();
+    else
+        do_update_autocheck();
 
     {
     time_t last_noop  = time(0);
@@ -2241,6 +2515,12 @@ int main(int argc, char *argv[])
         case KEY_ALT_F7: do_search(); break;   /* jump to next name with a prefix     */
         case KEY_ALT_F8: do_fullscreen(); break; /* full-screen the active panel      */
         case KEY_ALT_F9: do_checksum(); break; /* CRC32 + MD5 of the selected file    */
+        case KEY_ALT_F10:
+            do_update();                       /* check for a signed update           */
+            /* "Install now" ends the session: the swap can only run once the
+             * stack and the TUI are down. */
+            if (g_upd_now) running = 0;
+            break;
 
         case KEY_F10:
             if (dlg_confirm(L("Quit", "Beenden"),
@@ -2261,5 +2541,45 @@ int main(int argc, char *argv[])
         FtpClient::shutdown_stack();
 
     tui_shutdown();
+
+    /* Install a staged update, if any.
+     *
+     * This has to happen HERE and nowhere earlier: the executable being
+     * renamed is the one currently running, so the mTCP interrupt hooks must
+     * be released and the TUI restored first. On DOS the swap itself is safe -
+     * the program image is fully in memory and no handle to the file is open,
+     * so both renames are plain FAT directory-entry updates. */
+    if (upd_pending()) {
+        char msg[256];
+        int rc = upd_commit(msg, (int)sizeof(msg));
+        if (msg[0]) printf("\n%s\n", msg);
+
+        if (rc == UPD_OK && g_upd_restart) {
+            /* execv replaces this process image rather than spawning a child,
+             * so the new version does not need a second 270 KB of conventional
+             * memory to start. Arguments are passed through, minus
+             * /UPDATECHECK, which would otherwise send the fresh binary
+             * straight back into an update check. */
+            char *newargv[24];
+            int n = 0, k;
+            newargv[n++] = (char *)upd_exe_path();
+            for (k = 1; k < argc && n < 23; k++) {
+                const char *o = argv[k];
+                if (*o == '/' || *o == '-') o++;
+                if (strnicmp(o, "updatecheck", 11) == 0 && o[11] == '\0') continue;
+                newargv[n++] = argv[k];
+            }
+            newargv[n] = 0;
+
+            printf(L("Restarting FTP4DOS...\n", "FTP4DOS wird neu gestartet...\n"));
+            execv(upd_exe_path(), newargv);
+
+            /* Only reached if the exec failed; there is still a valid
+             * executable on disk, so just say so and exit normally. */
+            printf(L("Could not restart automatically - please start FTP4DOS again.\n",
+                     "Neustart nicht m" oe "glich - bitte FTP4DOS erneut starten.\n"));
+        }
+    }
+
     return 0;
 }

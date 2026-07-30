@@ -56,7 +56,13 @@ APP_OBJS = &
     src\lpanel.obj &
     src\lfn.obj &
     src\rpanel.obj &
+    src\netcore.obj &
     src\ftpcli.obj &
+    src\httpget.obj &
+    src\update.obj &
+    src\sha256.obj &
+    src\rsaverify.obj &
+    src\rsakeys.obj &
     src\dialog.obj &
     src\viewer.obj &
     src\editor.obj &
@@ -130,8 +136,33 @@ src\lfn.obj: src\lfn.cpp src\lfn.h
 src\rpanel.obj: src\rpanel.cpp src\rpanel.h src\panel.h src\namestore.h src\tui.h src\ftpcli.h src\cpmap.h src\i18n.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
 
-src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\ncftp.cfg src\cpmap.h src\i18n.h
+# netcore pulls in mTCP headers, so it needs CFG_H just like ftpcli.
+src\netcore.obj: src\netcore.cpp src\netcore.h src\ncftp.cfg
     $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
+
+src\ftpcli.obj: src\ftpcli.cpp src\ftpcli.h src\netcore.h src\ncftp.cfg src\cpmap.h src\i18n.h
+    $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
+
+# httpget pulls in mTCP headers, so it needs CFG_H just like ftpcli.
+src\httpget.obj: src\httpget.cpp src\httpget.h src\netcore.h src\ncftp.cfg src\lfn.h src\i18n.h src\umlaut.h
+    $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
+
+# update reads MTCP.CFG for the optional host override, so it needs CFG_H.
+src\update.obj: src\update.cpp src\update.h src\httpget.h src\sha256.h src\rsaverify.h src\rsakeys.h src\ncftp.cfg src\lfn.h src\i18n.h src\umlaut.h
+    $(CPP) $(CFLAGS) -DCFG_H="ncftp.cfg" $(INCPATH) -fo=$@ $[@
+
+# Crypto for the signed auto-updater. Both are free of DOS/TUI/mTCP
+# dependencies, so no CFG_H here - and they build on the host too, which is
+# what tools/test-crypto.ps1 exercises.
+src\sha256.obj: src\sha256.cpp src\sha256.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+src\rsaverify.obj: src\rsaverify.cpp src\rsaverify.h
+    $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@
+
+# -zt64 keeps the two 256-byte public-key arrays out of the scarce DGROUP.
+src\rsakeys.obj: src\rsakeys.cpp src\rsakeys.h
+    $(CPP) $(CFLAGS) -zt64 $(INCPATH) -fo=$@ $[@
 
 src\dialog.obj: src\dialog.cpp src\dialog.h src\tui.h src\keymap.h src\i18n.h src\sites.h src\connsave.h
     $(CPP) $(CFLAGS) $(INCPATH) -fo=$@ $[@

@@ -22,6 +22,13 @@ struct UiState {
     char startdir[80];
     int  lsort_key, lsort_desc, lsort_saved;   /* left/local pane   */
     int  rsort_key, rsort_desc, rsort_saved;   /* right/remote pane */
+    /* Auto-update check. Off by default: a program that phones out on every
+     * start should be something the user asked for, not something they have to
+     * discover and switch off. updlast throttles it to once a week and is
+     * written even when the check fails, so an unreachable server does not
+     * mean a delay on every single start. */
+    int  updcheck;                             /* 1 = check at startup      */
+    long updlast;                              /* YYYYMMDD, 0 = never       */
 };
 
 /* Set the storage path once: the EXE's directory (from argv[0]),
