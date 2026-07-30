@@ -172,3 +172,27 @@ VOGONS — thanks to Yoghoo, ntalaec, Grzyb and fly_indiz.
 - Fixes: an empty directory on an LFN system could show no `..` entry; the
   name buffer could fail to allocate at all with little free conventional
   memory
+
+## v1.1.0 — 2026-07-30
+
+Automatic updates
+
+- **Alt+F10 checks for a new version**, downloads it and installs it on exit.
+  The previous executable is kept as `FTP4DOS.BAK`.
+- **Every update is RSA-2048 signed.** The manifest carries the SHA-256 of the
+  executable and is signed with a key whose private half never leaves the
+  maintainer's machine; the public keys are compiled into FTP4DOS. A manifest
+  that does not verify is refused outright — there is no override.
+  This matters because the transport cannot be encrypted: mTCP has no TLS, so
+  authenticity comes from the signature rather than from the connection.
+- **Optional startup check**, off by default, at most once a week, and it never
+  does more than write a line in the status bar. New switches `/UPDATECHECK`
+  and `/NOUPDATECHECK`; the setting lives in `FTP4DOS.SAV` as `updcheck`.
+- The update channel is a small Cloudflare Worker that reads this repository's
+  latest GitHub release and serves it over plain HTTP, because GitHub
+  requires HTTPS.
+- New: SHA-256 (`sha256.cpp`) and an RSA-2048 PKCS#1 v1.5 verifier
+  (`rsaverify.cpp`), both 16-bit real mode, no assembly, still `-0`/8086.
+- The socket-to-disk transfer core moved to `netcore.cpp` so HTTP downloads use
+  the same proven path as FTP — including the Silly Window Syndrome handling
+  that large downloads depend on.

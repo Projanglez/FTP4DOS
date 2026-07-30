@@ -81,7 +81,7 @@ FTP4DOS.EXE
 ### Command-line parameters
 
 ```
-FTP4DOS [/L:DE|EN] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/Q] [/MONO|/COLOR]   (or /?)
+FTP4DOS [/L:DE|EN] [/H:HOST] [/LASTCON] [/P:PORT] [/U:USER] [/W:PASS] [/D:DIR] [/S:ALL|NOPASS|OFF] [/SITES] [/EXMEM[:XMS|EMS]|/NOEXMEM] [/UPDATECHECK|/NOUPDATECHECK] [/Q] [/MONO|/COLOR]   (or /?)
 ```
 
 Both `/` and `-` are accepted as the flag prefix. Flags are **case-insensitive**;
@@ -102,6 +102,8 @@ values are passed through as-is (username and password are case-sensitive).
 | `/SITES` | Open the site manager directly on startup (takes precedence over `/H:` and `/LASTCON`) |
 | `/EXMEM` | Force a backend for large remote listings in extended/expanded memory (`/EXMEM:XMS` or `/EXMEM:EMS`); plain `/EXMEM` is the automatic default and no longer needed |
 | `/NOEXMEM` | Never use XMS/EMS, stay in conventional memory |
+| `/UPDATECHECK` | Check for a new version on startup (same as Alt+F10) |
+| `/NOUPDATECHECK` | Skip the automatic update check for this run |
 | `/Q` | Skip the splash screen |
 | `/MONO` | Force monochrome display (MDA/Hercules) |
 | `/COLOR` | Force color display (default: auto-detect) |
@@ -138,6 +140,8 @@ file (`MTCPCFG`):
 | `FTP4DOS_FILE_BUFFER` | 512–32768 | 8192 | File I/O buffer: received data is written to disk in blocks of this size (uploads read in the same blocks) |
 | `FTP4DOS_CODEPAGE` | 437/850/858/866 | auto | Codepage for UTF-8 file name conversion (default: active DOS codepage) |
 | `FTP4DOS_XFERLOG` | path | off | Diagnostics: writes one line per second during a transfer (elapsed time, bytes total, bytes in the last second, receive/idle/disk-write counts, buffer fill) |
+| `FTP4DOS_UPDHOST` | host name | the project's Worker | Host serving the update channel |
+| `FTP4DOS_UPDPORT` | 1–65535 | 80 | Port for the above |
 
 The mTCP FTP client settings `FTP_TCP_BUFFER` / `FTP_FILE_BUFFER` are read
 as fallbacks, so an already tuned `MTCP.CFG` works as-is; the `FTP4DOS_*`
@@ -182,7 +186,46 @@ FTP4DOS_FILE_BUFFER 32768
 | F9 | Refresh the active pane |
 | Alt+F1 | Switch local drive |
 | Alt+F9 | Checksum (CRC32 + MD5) of the selected file, optionally saved to a file |
+| Alt+F10 | Check for updates |
 | F10 | Quit |
+
+## Updating
+
+FTP4DOS can update itself. **Alt+F10** checks for a new version; if there is
+one you get its version, date, size, SHA-256 and release notes, and nothing is
+downloaded until you say so. The swap happens when FTP4DOS exits — the previous
+executable is kept as `FTP4DOS.BAK` — and FTP4DOS can restart itself into the
+new version.
+
+An optional check at startup is **off by default**. Switch it on by setting
+`updcheck=1` in `FTP4DOS.SAV`; it then runs at most once a week, only ever
+fetches the small manifest, and does no more than put a line in the status bar.
+`/NOUPDATECHECK` skips it for one run, `/UPDATECHECK` forces a check.
+
+### How updates are authenticated
+
+mTCP has no TLS, so updates travel over plain HTTP. Authenticity does not come
+from the connection but from a signature:
+
+- The manifest naming the new version and its SHA-256 is signed with RSA-2048.
+- The matching public keys are compiled into FTP4DOS.
+- The signature is verified **before** the manifest is read, and the downloaded
+  executable must match the SHA-256 the signed manifest states.
+- If either check fails the update is refused. There is no way to override it.
+
+Nobody on the network path — and neither GitHub nor Cloudflare, which carry the
+files — can produce an update FTP4DOS will install. They can stop updates from
+arriving; but they cannot substitute one.
+
+The SHA-256 is shown before the download and published in the release notes, so
+it can be compared by hand if you want to.
+
+Updates come from a small Cloudflare Worker (`tools/worker/`) that reads this
+repository's latest GitHub release. It exists only because no GitHub endpoint
+serves files over plain HTTP: Pages enforces HTTPS on its default domain and
+release assets need short-lived signed URLs. Point FTP4DOS somewhere else with
+`FTP4DOS_UPDHOST` / `FTP4DOS_UPDPORT` in `MTCP.CFG` if you prefer to host it
+yourself — the signature check applies either way.
 
 ## License
 

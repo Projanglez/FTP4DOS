@@ -17,6 +17,7 @@
 #include <dos.h>
 
 #include "ftpcli.h"
+#include "netcore.h"  /* driveStack/drainToFile/buffers, shared with httpget */
 #include "cpmap.h"
 #include "lfn.h"      /* lfn_fopen/lfn_remove: local names may be long */
 #include "i18n.h"
@@ -38,220 +39,23 @@
 
 /* --- Constants ----------------------------------------------------------- */
 #define CTRL_TIMEOUT_MS     30000ul   /* 30s for control commands (CLAUDE.md) */
-#define DATA_TIMEOUT_MS     60000ul   /* 60s for data transfers               */
-/* 5s: a lost first SYN (cold start) fails fast instead of burning 15s before
- * the app-level retry (perform_connect) sends a fresh SYN. mTCP's own SYN
- * retry only kicks in after ~10s - too late for that purpose. */
-#define CONNECT_TIMEOUT_MS  5000ul
 /* Cancel path. Both are quiet windows, not fixed waits: they end as soon as
  * the peer stops sending. The old code burned a flat 3 s draining plus a
  * blocking close() that always ran to TCP_CLOSE_TIMEOUT (10 s), which is how
  * cancelling a download came to freeze the progress dialog for ~20 s. */
 #define ABORT_QUIET_MS       300ul   /* no more data -> the abort has landed */
 #define ABORT_CLOSE_MS      1500ul   /* cap on the FIN exchange              */
-/* How often the transfer loop polls the progress callback (= the keyboard)
- * when no data is arriving, so ESC still works on a stalled transfer. */
-#define CB_POLL_MS           200ul
 #define CONTROL_RECV_SIZE    1024
-#define DATA_RECV_SIZE      16384   /* mTCP maximum; large receive window      */
 /* Read block size for the LIST data connection (goes to memory, uncritical). */
 #define DATA_CHUNK           4096
-/* File transfer buffer: received data is accumulated here and written to
- * disk in large blocks (small writes are expensive on old machines - see
- * the mTCP FTP client, FTP_FILE_BUFFER). Both sizes are configurable in
- * MTCP.CFG: FTP4DOS_TCP_BUFFER / FTP4DOS_FILE_BUFFER, with the mTCP FTP
- * client's FTP_TCP_BUFFER / FTP_FILE_BUFFER as fallback keys. */
-#define FILE_BUF_DEFAULT     8192
-#define FILE_BUF_MAX        32768UL
-#define TCP_BUF_MAX         16384UL
-#define BUF_CFG_MIN           512UL
+
+/* DATA_TIMEOUT_MS, CONNECT_TIMEOUT_MS, CB_POLL_MS, DATA_RECV_SIZE and the
+ * file/disk buffer sizes are in netcore.h - shared with httpget.cpp so both
+ * transports behave identically. */
 
 
 /* --- File-local state ----------------------------------------------------- */
 static int g_stackUp = 0;             /* did initStack succeed?       */
-static uint16_t g_nextLocalPort = 4096;
-static uint16_t g_tcpBufSize  = DATA_RECV_SIZE;    /* data socket recv buffer */
-static uint16_t g_fileBufSize = FILE_BUF_DEFAULT;  /* file transfer buffer    */
-static uint8_t *g_fileBuf     = 0;                 /* allocated in init_stack */
-
-/* Chunk size of a single disk write; configurable via FTP4DOS_DISK_SLICE so
- * it can be bisected on real hardware (see init_stack). */
-#define DISK_SLICE_DEFAULT 4096u
-#define DISK_SLICE_MAX    16384UL
-static uint16_t g_diskSlice = DISK_SLICE_DEFAULT;
-
-/* --- Transfer sampler (diagnostics, off unless configured) ----------------
- * Writes one CSV line per second to the file named by FTP4DOS_XFERLOG in
- * MTCP.CFG. mTCP's own tracing (SET DEBUGGING / SET LOGFILE) reports totals
- * for the whole run, which cannot show WHEN a transfer stalls - and the
- * problem reported from real hardware is a periodic burst/stall pattern, so
- * the shape over time is the evidence. Per-segment TCP tracing would show it
- * but writes a line per packet to the same slow disk and thereby changes the
- * very timing under test; one line per second does not. */
-#define XFERLOG_INTERVAL_MS 1000ul
-static char  g_xferLogPath[64] = "";
-static FILE *g_xferLog  = 0;
-static unsigned long g_xlRecv;      /* recv() calls that returned data      */
-static unsigned long g_xlIdle;      /* passes that found nothing to read    */
-static unsigned long g_xlFlush;     /* buffer flushes (disk writes)         */
-static unsigned long g_xlPrev;      /* byte count at the previous sample    */
-static clockTicks_t  g_xlStart;
-static clockTicks_t  g_xlLast;
-
-static uint16_t nextLocalPort(void) {
-    uint16_t p = g_nextLocalPort++;
-    if (g_nextLocalPort >= 32000) g_nextLocalPort = 4096;
-    return p;
-}
-
-/* Drive the mTCP stack once (needed in every wait loop). */
-static void driveStack(void) {
-    PACKET_PROCESS_SINGLE;
-    Arp::driveArp();
-    Tcp::drivePackets();
-}
-
-/* Milliseconds elapsed since the given tick value. */
-static unsigned long elapsedMs(clockTicks_t start) {
-    return (unsigned long)Timer_diff(start, TIMER_GET_CURRENT()) * TIMER_TICK_LEN;
-}
-
-/* --- Transfer sampler --------------------------------------------------- */
-
-/* Start sampling one transfer. Does nothing unless FTP4DOS_XFERLOG is set.
- * The file is appended to, so several transfers end up in one log. */
-static void xferLogOpen(const char *what, const char *name, unsigned long size)
-{
-    if (g_xferLogPath[0] == '\0') return;
-    g_xferLog = fopen(g_xferLogPath, "a");
-    g_xlRecv = g_xlIdle = g_xlFlush = g_xlPrev = 0;
-    g_xlStart = g_xlLast = TIMER_GET_CURRENT();
-    if (!g_xferLog) return;
-    fprintf(g_xferLog,
-            "\n# %s %s (%lu bytes) tcpbuf=%u filebuf=%u slice=%u\n"
-            "# sec,total,delta,recv,idle,flush,buffill\n",
-            what, name, size, g_tcpBufSize, g_fileBufSize, g_diskSlice);
-    fflush(g_xferLog);
-}
-
-/* Emit one sample if the interval has elapsed. Called from the transfer loop,
- * which already polls on a timer, so this costs a tick comparison per pass. */
-static void xferLogSample(unsigned long total, unsigned bufUsed)
-{
-    unsigned long ms;
-    if (!g_xferLog) return;
-    ms = elapsedMs(g_xlLast);
-    if (ms < XFERLOG_INTERVAL_MS) return;
-    g_xlLast = TIMER_GET_CURRENT();
-    fprintf(g_xferLog, "%lu.%02lu,%lu,%lu,%lu,%lu,%lu,%u\n",
-            elapsedMs(g_xlStart) / 1000ul, (elapsedMs(g_xlStart) % 1000ul) / 10ul,
-            total, total - g_xlPrev,
-            g_xlRecv, g_xlIdle, g_xlFlush, bufUsed);
-    /* Flush every line: if the transfer hangs hard enough to need a reboot,
-     * the log up to that point is what we get to look at. */
-    fflush(g_xferLog);
-    g_xlPrev  = total;
-    g_xlRecv  = g_xlIdle = g_xlFlush = 0;
-}
-
-static void xferLogClose(unsigned long total, int ioerr)
-{
-    if (!g_xferLog) return;
-    fprintf(g_xferLog, "# done after %lums, %lu bytes, ioerr=%d\n",
-            elapsedMs(g_xlStart), total, ioerr);
-    fclose(g_xferLog);
-    g_xferLog = 0;
-}
-
-/* Accumulation state for the file transfer buffer. Shared between the
- * readReply() drain hook and the main transfer loop in retr(), so the fill
- * offset stays consistent across both.
- *
- * NOTE (v1.0.1): this was briefly reworked into a ring buffer that refilled
- * from the socket between disk-write slices, the idea being that freed space
- * reopens the TCP receive window mid-flush. Measured in the QEMU test VM it
- * was catastrophic - a 5 MB download went from under 4 s to an ETA of over
- * 4 minutes (~70x slower), because a nearly-full ring hands recv() tiny
- * fragments and each of those costs a pure ACK. The proven linear buffer is
- * back; do not reintroduce the ring without measuring a full download first. */
-struct XferBuf {
-    uint8_t  *buf;      /* g_fileBuf                          */
-    uint16_t  size;     /* g_fileBufSize                      */
-    uint16_t  used;     /* accumulated bytes not yet written  */
-};
-
-/* Write the accumulated buffer to disk in slices, driving the TCP stack
- * between the slices. During one big blocking fwrite (up to 32 KB) nothing
- * services the packet driver: incoming frames overflow its ring, segments
- * are lost and the server backs off into retransmission timeouts - the
- * burst/stall sawtooth observed on real hardware. Slicing keeps ACKs and
- * window updates flowing while the disk works; 4 KB per slice keeps the
- * large-block write advantage (see FILE_BUF_* above).
- * Returns 0 on success, -1 on write error. */
-static int flushXferBuf(XferBuf *xb, FILE *f) {
-    uint16_t off = 0;
-    while (off < xb->used) {
-        uint16_t n = (uint16_t)(xb->used - off);
-        if (n > g_diskSlice) n = g_diskSlice;
-        if (fwrite(xb->buf + off, 1, (size_t)n, f) != (size_t)n)
-            return -1;
-        off += n;
-        g_xlFlush++;
-        driveStack();
-    }
-    xb->used = 0;
-    return 0;
-}
-
-/* Drain the data connection 'ds' as far as possible (RETR download).
- * This keeps the receive window open; otherwise it drops below one MSS or to
- * zero, the server stalls (Silly Window Syndrome) and sends nothing further
- * until its own persist probe fires (server-dependent, often several
- * seconds). mTCP itself re-announces the window immediately once we recv()
- * out of the zero state (TcpSocket::recv -> sendPureAck, mtcp/TCPLIB/TCP.CPP);
- * mTCP's own zero-window probe interval is 1s (TCP_PROBE_INTERVAL,
- * TCPINC/TCP.H) - there is no 5s timer in mTCP. Behavior verified against
- * mTCP 2025-01-10.
- * Received data is accumulated in xb and only written to 'f' once the
- * buffer is full: large writes instead of many per-MSS writes (the
- * latter is the difference between 10 KB/s and full speed on machines
- * with slow disk I/O); flushXferBuf() services the stack between the
- * write slices so the flush itself doesn't starve the packet driver.
- * Returns: >0 bytes received (added to *total), 0 nothing available,
- * -1 write error, -2 connection closed. */
-static int drainToFile(TcpSocket *ds, FILE *f, XferBuf *xb,
-                       unsigned long *total) {
-    int16_t n;
-    int got = 0;
-    for (;;) {
-        if (xb->used == xb->size) {
-            if (flushXferBuf(xb, f) != 0)
-                return -1;
-        }
-        n = ds->recv(xb->buf + xb->used, (uint16_t)(xb->size - xb->used));
-        if (n <= 0) break;
-        xb->used += (uint16_t)n;
-        *total += (unsigned long)n;
-        g_xlRecv++;
-        got = 1;
-    }
-    if (!got) g_xlIdle++;
-    if (n < 0) return -2;
-    return got;
-}
-
-/* Swallow whatever the data connection still holds and throw it away.
- * recv() is what reopens a zero receive window - mTCP re-announces only when
- * the application reads out of the null state - so this is what lets an
- * aborting server flush its pipeline and send its FIN. Without it the close
- * below has nothing to wait for and burns TCP_CLOSE_TIMEOUT.
- * Returns 1 if anything was read. */
-static int drainDiscard(TcpSocket *ds) {
-    int got = 0;
-    if (!ds) return 0;
-    while (ds->recv(g_fileBuf, g_fileBufSize) > 0) got = 1;
-    return got;
-}
 
 /* Context for draining the data connection WHILE readReply() is waiting for
  * a control reply. Two uses:
@@ -282,42 +86,14 @@ static void __interrupt __far ctrlBreakHandler(void) {
     g_ctrlBreakDetected = 1;
 }
 
-/* Read one buffer size from MTCP.CFG: 'key' wins over 'fallbackKey' (the
- * key the mTCP FTP client uses, so already-tuned configs work as-is).
- * Out-of-range or missing values keep 'def'. */
-static uint16_t cfgBufSize(const char *key, const char *fallbackKey,
-                           unsigned long maxv, uint16_t def) {
-    char tmp[10];
-    if (Utils::getAppValue((char *)key, tmp, sizeof(tmp)) != 0 &&
-        Utils::getAppValue((char *)fallbackKey, tmp, sizeof(tmp)) != 0)
-        return def;
-    unsigned long v = strtoul(tmp, 0, 10);   /* atoi overflows at 32768 */
-    if (v < BUF_CFG_MIN || v > maxv) return def;
-    return (uint16_t)v;
-}
-
 int FtpClient::init_stack(void) {
     if (g_stackUp) return FTP_OK;
     /* Reads the MTCPCFG env variable + the configuration file. */
     if (Utils::parseEnv() != 0) return FTP_ERR_GENERAL;
 
-    /* Optional tuning values from MTCP.CFG (see FILE_BUF_DEFAULT above). */
     Utils::openCfgFile();
-    g_tcpBufSize  = cfgBufSize("FTP4DOS_TCP_BUFFER", "FTP_TCP_BUFFER",
-                               TCP_BUF_MAX, DATA_RECV_SIZE);
-    g_fileBufSize = cfgBufSize("FTP4DOS_FILE_BUFFER", "FTP_FILE_BUFFER",
-                               FILE_BUF_MAX, FILE_BUF_DEFAULT);
-    /* Chunk size of a single disk write during a download. Smaller reopens
-     * the receive window sooner on a slow drive, larger writes more
-     * efficiently; exposed so it can be bisected on real hardware. */
-    g_diskSlice   = cfgBufSize("FTP4DOS_DISK_SLICE", "FTP4DOS_DISK_SLICE",
-                               DISK_SLICE_MAX, DISK_SLICE_DEFAULT);
-    /* Diagnostics: path for the per-second transfer log (empty = disabled).
-     * Unlike mTCP's DEBUGGING/LOGFILE tracing this samples on a timer instead
-     * of per packet, so it can be left on for a full-size transfer. */
-    if (Utils::getAppValue((char *)"FTP4DOS_XFERLOG", g_xferLogPath,
-                           sizeof(g_xferLogPath)) != 0)
-        g_xferLogPath[0] = '\0';
+    /* Buffer/slice tuning and the transfer log path (see netcore.h). */
+    netcore_read_cfg();
     {
         /* Codepage for UTF-8 name conversion: default = active DOS CP
          * (INT 21h AX=6601h), overridable via FTP4DOS_CODEPAGE. */
@@ -329,16 +105,7 @@ int FtpClient::init_stack(void) {
     }
     Utils::closeCfgFile();
 
-    /* File transfer buffer (far heap, not DGROUP). If the configured size
-     * cannot be allocated, halve until it fits (never below 2048). */
-    if (!g_fileBuf) {
-        for (;;) {
-            g_fileBuf = (uint8_t *)malloc(g_fileBufSize);
-            if (g_fileBuf || g_fileBufSize <= 2048) break;
-            g_fileBufSize /= 2;
-        }
-        if (!g_fileBuf) return FTP_ERR_GENERAL;
-    }
+    if (netcore_alloc_buffers() != 0) return FTP_ERR_GENERAL;
 
     if (Utils::initStack(TCP_MAX_SOCKETS, TCP_MAX_XMIT_BUFS,
                          ctrlBreakHandler, ctrlBreakHandler) != 0) return FTP_ERR_GENERAL;

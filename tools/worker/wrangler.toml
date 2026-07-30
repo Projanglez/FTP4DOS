@@ -1,0 +1,7 @@
+name = "ftp4dos-update"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# The workers.dev subdomain is the whole point: it answers on plain port 80
+# without redirecting to HTTPS, which the default *.github.io domain does not.
+workers_dev = true

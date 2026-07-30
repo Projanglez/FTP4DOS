@@ -27,6 +27,15 @@ RELEASE-NOTES-*.md
 *.SAV
 *.sav
 
+# Signaturschluessel fuer den Auto-Updater. Der PRIVATE Schluessel darf niemals
+# ins Repo - wer ihn hat, kann beliebige Updates fuer jede ausgelieferte
+# FTP4DOS-Installation signieren. Nur die oeffentlichen Moduli gehoeren als
+# src/rsakeys.h in die Versionsverwaltung.
+*.pem
+*.key
+ftp4dos-sign-*
+keys/
+
 # Watcom temporaere Dateien
 *.ERR
 *.err
@@ -39,3 +48,6 @@ CLAUDE.md
 # QEMU-Test-VMs: Nichts davon einchecken.
 vm/
 vm71/
+# Wrangler-Arbeitsdateien (enthalten u. a. die Cloudflare-Konto-ID)
+tools/worker/.wrangler/
+node_modules/
