@@ -26,6 +26,7 @@ Download latest release here: <https://github.com/Projanglez/ftp4dos/releases/la
 - Multiple selection with the **Ins key** (Norton style) for copy/move/delete
 - Live transfer telemetry (current/average speed, per-file and batch ETA); pause (P) and cancel (ESC) mid-transfer
 - View files with F3 (up to 32 KB; remote files via temp download); edit local text files with F4 (minimal editor)
+- **F3/Enter display images** — BMP, PCX, GIF and PNG in 320x200 with 256 colours on any VGA, with pan and zoom
 - File checksums (Alt+F9): CRC32 + MD5 for local and remote files, optionally saved to a file
 
 ### File names & character sets
@@ -123,6 +124,35 @@ dialog) keeps any number of named profiles in `FTP4DOS.SIT`.
 **Security note:** Stored passwords are lightly obfuscated (XOR + hex), not
 encrypted — and FTP transmits passwords in plain text anyway.
 
+## Viewing images
+
+**F3** (or Enter) on a picture shows it full-screen in 320x200 with 256
+colours. The format is taken from the file's content, not its name. Pictures
+open fitted to the screen; the zoom level is shown in the top right corner.
+
+| Key | Action |
+|---|---|
+| `+` / `-` | Zoom: fit, 25, 50, 100, 200, 400, 800 % |
+| `*` | 1:1 |
+| `f`, Enter | Fit to screen |
+| Arrows | Pan |
+| PgUp / PgDn | Pan a screen at a time |
+| Home / End | Top-left / bottom-right |
+| Esc, `q` | Close |
+
+| Format | Decoded |
+|---|---|
+| BMP | 1/4/8/24/32 bpp; uncompressed, RLE8, RLE4 |
+| PCX | RLE, 1/2/4/8 bpp |
+| GIF | 87a and 89a, interlaced; first frame of an animation |
+| PNG | greyscale, palette, RGB, RGBA, 1–16 bits |
+
+Not decoded: JPEG, TIFF, interlaced PNG.
+
+A picture needs about 100 KB of free conventional memory — **F1** shows how
+much you have. Pan and zoom additionally need XMS or EMS; without it the fitted
+view still works.
+
 ## Performance tuning
 
 > **Advanced — totally optional.** FTP4DOS works fine out of the box with
@@ -173,7 +203,7 @@ FTP4DOS_FILE_BUFFER 32768
 | F1 | Help |
 | F2 | FTP connect / disconnect (with site manager) |
 | Alt+F2 | Detail: full name + size of the selected entry |
-| F3 | View file (local or remote; max 32 KB) |
+| F3 | View file — picture or text |
 | Alt+F3 | Sort the active pane (name/extension/size/date/time, asc/desc) |
 | F4 | Edit local file (minimal editor, ~32 KB, no undo/search) |
 | F5 | Copy (recursive for directories) |
