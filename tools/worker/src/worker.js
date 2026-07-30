@@ -35,10 +35,14 @@ const FILES = {
   "/FTP4DOS.EXE": { asset: "FTP4DOS.EXE", type: "application/octet-stream" },
 };
 
-/* GitHub's unauthenticated API allows 60 requests per hour per IP. Caching the
- * release lookup at the edge keeps this to a trickle even across colos. */
-const RELEASE_TTL = 900;   /* 15 min */
-const ASSET_TTL   = 900;
+/* GitHub's unauthenticated API allows 60 requests per hour per IP, so the
+ * release lookup is cached - but only briefly. It decides how long after
+ * publishing a release the channel actually goes live, and 15 minutes of
+ * "there is no update" after a successful upload is confusing enough to look
+ * like a broken deployment. Assets are immutable once uploaded and can be
+ * cached far longer. */
+const RELEASE_TTL = 60;    /* 1 min  - publish-to-live delay */
+const ASSET_TTL   = 900;   /* 15 min - immutable per release */
 
 /* The client is a 16-bit real-mode DOS program speaking HTTP/1.0. Keep the
  * response boring: an explicit Content-Length (the progress bar needs a total,
@@ -53,7 +57,12 @@ function plain(body, contentType, status = 200, extra = {}) {
     headers: {
       "Content-Type": contentType,
       "Content-Length": String(bytes.byteLength),
-      "Cache-Control": `public, max-age=${ASSET_TTL}`,
+      /* Never cache errors. A 404 from the window between creating a release
+       * and uploading its assets would otherwise stick around long after the
+       * upload succeeded, which reads as a broken channel. */
+      "Cache-Control": status === 200
+        ? `public, max-age=${ASSET_TTL}`
+        : "no-store",
       ...extra,
     },
   });
@@ -85,16 +94,29 @@ export default {
     if (request.method !== "GET" && request.method !== "HEAD")
       return text("method not allowed", 405);
 
+    /* ?fresh=1 skips the cached release lookup. Without it there is no way to
+     * tell "the release really has no manifest" from "the lookup is a cached
+     * answer from before the assets were uploaded" - and the edge cache is
+     * keyed by URL, so redeploying the Worker does not clear it. */
+    const fresh = url.searchParams.has("fresh");
+
     /* 1. Resolve the latest release. */
     let release;
     try {
-      const r = await fetch(API, {
+      /* A cache-busting query parameter, not cacheTtl: 0. The edge cache is
+       * keyed by URL, and cacheTtl only governs how long a response is STORED -
+       * it does not stop an existing entry from being read. Only a different
+       * URL guarantees a fresh answer. */
+      const apiUrl = fresh ? `${API}?_cb=${Date.now()}` : API;
+      const r = await fetch(apiUrl, {
         headers: {
           /* GitHub rejects API requests without a User-Agent. */
           "User-Agent": "ftp4dos-update-worker",
           "Accept": "application/vnd.github+json",
         },
-        cf: { cacheEverything: true, cacheTtl: RELEASE_TTL },
+        cf: fresh
+          ? { cacheTtl: 0 }
+          : { cacheEverything: true, cacheTtl: RELEASE_TTL },
       });
       if (!r.ok) return text(`github api ${r.status}`, 502);
       release = await r.json();
