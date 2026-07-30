@@ -199,57 +199,33 @@ Automatic updates
 
 ## v1.2.0 — 2026-07-30
 
-Image viewing and file associations
+Image viewing
 
-- **F3 and Enter can hand a file to an external program.** Associations live in
-  `FTP4DOS.EXT` next to the executable, one line per extension
-  (`jpg=C:\TOOLS\PICTVIEW\PICTVIEW.EXE %1`). `%1` becomes the full path; without
-  it the path is appended. Anything with no association goes to the built-in
-  text viewer exactly as before, so a machine without the file behaves as it
-  always did.
-- **This is how images are viewed.** FTP4DOS has no image decoders; pointing
-  `jpg`/`png`/`gif`/`bmp`/`pcx` at a DOS image viewer is what makes F3 show a
-  picture. The same mechanism serves unzip, players or a hex editor.
-- **Remote files are downloaded to a temporary file that keeps its real
-  extension** (`$NCIMG$.JPG` rather than a bare `.TMP`), since external programs
-  identify a file by its extension. Four-letter forms are mapped to 8.3
-  (`jpeg`→`JPG`, `tiff`→`TIF`, `html`→`HTM`). The temp file is removed
-  afterwards.
-- **The association is resolved before anything is downloaded**, so declining
-  the prompt for an unassociated image costs no transfer.
-- **F1 now reports free conventional memory.** An external program has to fit
-  into what is left while FTP4DOS stays resident, and that figure is what
-  decides whether it can start at all. A failed launch names the reason and
-  repeats the number.
-- `FTP4DOS.EXT` is read on demand rather than held in memory, so it can be
-  edited while FTP4DOS is running.
-- **F3 and Enter show images**, in 320x200 with 256 colours: BMP (1/4/8/24/32
-  bpp, uncompressed plus RLE8 and RLE4), PCX, GIF (including interlaced) and
-  PNG. The
-  format is detected from the file's content, not its extension, so a
-  mislabelled download still opens.
-- **Palette images get their exact colours**, loaded straight into the VGA DAC.
-  Truecolour is quantised to a 6x6x6 cube with a 40-step grey ramp and 4x4
-  ordered dithering; PNG alpha is composited rather than discarded.
-- **No decoder ever holds the whole picture.** Rows are scaled into a
-  screen-sized framebuffer as they arrive, each carrying its own destination
-  index, which is what makes bottom-up BMP and interlaced GIF work in a fixed
-  amount of memory. A picture costs about 100 KB while it is on screen, and the
-  help screen tells you what you have.
-- Decoding happens before the display switches to graphics, so a damaged file
-  produces an ordinary dialog on an intact screen, and Esc aborts a slow decode.
-- Not decoded, and refused with a clear message rather than a guess: JPEG, TIFF,
-  interlaced PNG, and BMP variants beyond those listed. An association can still
-  be pointed at an external program for those.
-- **Pan and zoom.** A picture opens fitted to the screen (or 1:1 if it already
-  fits); `+`/`-` step through 25/50/100/200/400/800 %, the arrow keys and
+- **F3 and Enter show images**, in 320x200 with 256 colours on any VGA: BMP
+  (1/4/8/24/32 bpp, uncompressed plus RLE8 and RLE4), PCX, GIF including
+  interlaced, and PNG. The format is detected from the file's content, not its
+  extension, so a mislabelled download still opens.
+- **Pan and zoom.** A picture opens fitted to the screen, or 1:1 if it already
+  fits; `+`/`-` step through 25/50/100/200/400/800 %, the arrow keys and
   PgUp/PgDn move around, `*` jumps to 1:1, `f` returns to fit, and the current
   zoom is shown in the top right corner. This matters on a 720x400 screenshot,
   where fitting to 320x200 throws away three quarters of the pixels and the
-  text stops being readable.
-- To make that possible the decoded picture is kept in **XMS/EMS** (through the
-  same `extmem.cpp` the panel store uses) at one byte per pixel, so moving
-  around re-samples an image already in memory instead of decoding the file
-  again: a 720x400 picture is 288000 bytes and could never live in conventional
-  memory. Without extended memory the viewer still shows the fitted view, just
-  without pan and zoom.
+  text in it stops being readable.
+- **Palette images get their exact colours**, loaded straight into the VGA DAC.
+  Truecolour is quantised to a 6x6x6 cube with a 40-step grey ramp and 4x4
+  ordered dithering; PNG alpha is composited rather than discarded.
+- **No decoder ever holds the whole picture.** Rows arrive one at a time, each
+  carrying its own destination index, which is what makes bottom-up BMP,
+  interlaced GIF and RLE deltas work in a fixed amount of memory.
+- The decoded picture is kept in **XMS/EMS** (through the same `extmem.cpp` the
+  panel store uses) at one byte per pixel, so panning and zooming re-sample an
+  image already in memory instead of decoding the file again: a 720x400 picture
+  is 288000 bytes and could never live in conventional memory. Without extended
+  memory the fitted view still works, just without pan and zoom.
+- Decoding happens before the display switches to graphics, so a damaged file
+  produces an ordinary dialog on an intact screen, and Esc aborts a slow decode.
+- **F1 reports free conventional memory.** A picture needs about 100 KB of it,
+  so that figure is what decides whether one can be shown; the out-of-memory
+  dialog repeats it.
+- Not decoded, and refused with a clear message rather than a guess: JPEG, TIFF,
+  interlaced PNG, and BMP variants beyond those listed.

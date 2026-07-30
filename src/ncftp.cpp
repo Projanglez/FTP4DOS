@@ -32,7 +32,6 @@
 #include "dialog.h"
 #include "extmem.h"
 #include "viewer.h"
-#include "assoc.h"
 #include "imgview.h"
 #include "editor.h"
 #include "dircopy.h"
@@ -1022,49 +1021,16 @@ static void do_copy(void)
 }
 
 /* -------------------------------------------------------------------------
- * Report a failed association launch, naming the reason.
- * ---------------------------------------------------------------------- */
-static void assoc_report_error(int rc, const char *cmd)
-{
-    char msg[220];
-
-    /* assoc_run() re-initialised the TUI, so the screen is blank; put the
-     * panels back before the dialog draws itself over them. */
-    redraw_all();
-
-    if (rc == ASSOC_ENOENT) {
-        sprintf(msg, L("The associated program was not found:\n%.60s\n\n"
-                       "Check the path in FTP4DOS.EXT.",
-                       "Das zugeordnete Programm wurde nicht gefunden:\n%.60s\n\n"
-                       "Pfad in FTP4DOS.EXT pr" ue "fen."), cmd);
-    } else if (rc == ASSOC_ENOMEM) {
-        sprintf(msg, L("Not enough free memory to start:\n%.60s\n\n"
-                       "Only %u KB are free while FTP4DOS is running.",
-                       "Zu wenig freier Speicher zum Starten von:\n%.60s\n\n"
-                       "W" ae "hrend FTP4DOS l" ae "uft sind nur %u KB frei."),
-                cmd, assoc_free_kb());
-    } else {
-        sprintf(msg, L("Could not start:\n%.60s\n\n%u KB free.",
-                       "Konnte nicht gestartet werden:\n%.60s\n\n%u KB frei."),
-                cmd, assoc_free_kb());
-    }
-    dlg_error(L("Open", Oe "ffnen"), msg);
-}
-
-/* -------------------------------------------------------------------------
  * F3 - View file (local directly, remote via temporary download)
  * -----------------------------------------------------------------------------
- * An extension listed in FTP4DOS.EXT is handed to the external program named
- * there (this is how images are viewed); everything else goes to the built-in
- * text viewer. The lookup happens BEFORE any download, so declining the hint
- * for an unassociated image costs no transfer.
+ * A file whose content probes as a supported image goes to the graphics
+ * viewer, everything else to the text viewer. Probing is by content, not by
+ * extension, so a mislabelled file still opens correctly.
  * ---------------------------------------------------------------------- */
 static void do_view(void)
 {
     char path[PANEL_HEADER_MAX + PANEL_NAME_MAX + 4];
-    char cmd[ASSOC_CMD_MAX];
     const char *ext;
-    int  have_assoc;
     PanelEntry *e;
 
     if (g_active == 0) return;
@@ -1072,39 +1038,26 @@ static void do_view(void)
     if (e == 0 || e->is_parent || e->is_dir) { redraw_all(); return; }
     if (!name_complete(e)) { redraw_all(); return; }
 
-    ext = assoc_ext_of(entry_name(e));
-    have_assoc = assoc_lookup(ext, cmd, (int)sizeof(cmd));
+    ext = img_ext_of(entry_name(e));
 
-    /* An image format we have no decoder for (JPEG, TIFF, ...) and no
-     * association would just be noise in the text viewer. Ask up front - for a
-     * remote file this also saves downloading it for nothing. */
-    if (!have_assoc && assoc_is_image_ext(ext) && !img_ext_known(ext)) {
-        char q[280];
-        sprintf(q, L("FTP4DOS cannot display .%.8s files, and no\n"
-                     "program is associated with them.\n\n"
-                     "Add a line to FTP4DOS.EXT, for example:\n"
-                     "  %.8s=C:\\TOOLS\\VIEWER.EXE %%1\n\n"
+    /* An image format we have no decoder for (JPEG, TIFF, ...) would just be
+     * noise in the text viewer. Ask up front - for a remote file this also
+     * saves downloading it for nothing. */
+    if (img_is_image_ext(ext) && !img_ext_known(ext)) {
+        char q[240];
+        sprintf(q, L("FTP4DOS cannot display .%.8s files.\n\n"
                      "Show the file as text anyway?",
-                     "FTP4DOS kann .%.8s nicht anzeigen, und es ist\n"
-                     "kein Programm daf" ue "r verkn" ue "pft.\n\n"
-                     "Zeile in FTP4DOS.EXT erg" ae "nzen, z.B.:\n"
-                     "  %.8s=C:\\TOOLS\\VIEWER.EXE %%1\n\n"
-                     "Datei trotzdem als Text anzeigen?"), ext, ext);
-        if (!dlg_confirm(L("Open", Oe "ffnen"), q)) { redraw_all(); return; }
+                     "FTP4DOS kann .%.8s nicht anzeigen.\n\n"
+                     "Datei trotzdem als Text anzeigen?"), ext);
+        if (!dlg_confirm(L("View", "Anzeigen"), q)) { redraw_all(); return; }
     }
 
     if (g_active == (Panel *)&g_left) {
-        /* Local file. An explicit association wins over the built-in decoders:
-         * if the user named a program for this extension, they meant it. */
         join_local(path, (int)sizeof(path), g_left.path(), entry_name(e));
-        if (have_assoc) {
-            int rc = assoc_run(cmd, path, g_video_pref);
-            if (rc != ASSOC_OK) assoc_report_error(rc, cmd);
-        } else if (img_probe_file(path) != IMG_FMT_NONE) {
+        if (img_probe_file(path) != IMG_FMT_NONE)
             img_view(path, e->name, g_video_pref);
-        } else {
+        else
             view_file(path, e->name);
-        }
     } else {
         /* Remote: download to a temporary local file, view it, then delete it. */
         int rc;
@@ -1116,21 +1069,12 @@ static void do_view(void)
             return;
         }
         CopyCtx cc;
-        char    tmpname[16];
         memset(&cc, 0, sizeof(cc));
         cc.files_total = 1;
         cc.files_done  = 1;
-        /* The external program identifies the file by its extension, so the
-         * temp file has to carry the real one rather than a bare .TMP. */
-        if (have_assoc) {
-            char ext3[4];
-            assoc_dos_ext3(ext, ext3);
-            if (ext3[0]) sprintf(tmpname, "$NCIMG$.%s", ext3);
-            else         strcpy(tmpname, "$NCIMG$.TMP");
-        } else {
-            strcpy(tmpname, "$NCVIEW$.TMP");
-        }
-        join_local(path, (int)sizeof(path), g_left.path(), tmpname);
+        /* The temp file needs no meaningful extension: the viewer probes the
+         * content, not the name. */
+        join_local(path, (int)sizeof(path), g_left.path(), "$NCVIEW$.TMP");
         redraw_all();
         dlg_progress_begin(L("View", "Anzeigen"), 0);
         dlg_progress_setfile(e->name, 1, 1);
@@ -1149,15 +1093,10 @@ static void do_view(void)
             }
             return;
         }
-        if (have_assoc) {
-            int arc = assoc_run(cmd, path, g_video_pref);
-            if (arc != ASSOC_OK) assoc_report_error(arc, cmd);
-        } else if (img_probe_file(path) != IMG_FMT_NONE) {
-            /* Probed by content, so a mislabelled remote file still opens. */
+        if (img_probe_file(path) != IMG_FMT_NONE)
             img_view(path, e->name, g_video_pref);
-        } else {
+        else
             view_file(path, e->name);
-        }
         remove(path);
     }
     redraw_all();
@@ -2213,7 +2152,6 @@ int main(int argc, char *argv[])
      * g_host etc.; if the file is missing, the defaults remain. */
     connsave_init(argv[0]);
     sites_init(argv[0]);
-    assoc_init(argv[0]);    /* FTP4DOS.EXT: extension -> external program      */
     upd_init(argv[0]);      /* FTP4DOS.EXE/.NEW/.BAK next to the running image */
     connsave_load(g_host, (int)sizeof(g_host), g_portStr, (int)sizeof(g_portStr),
                   g_user, (int)sizeof(g_user), g_pass, (int)sizeof(g_pass),
@@ -2560,12 +2498,12 @@ int main(int argc, char *argv[])
              * and their Alt variants are visible there). Leading "\n" leaves a
              * blank line between the frame and the first content row.
              * The body is already at DLG_MAX_LINES, so the free-memory figure
-             * rides in the title - it is what an associated external program
-             * has to fit into, and the number to check when one won't start. */
+             * rides in the title - it is what a picture has to fit into, and
+             * the number to check when one will not open. */
             char htitle[72];
             sprintf(htitle, L("Help - FTP4DOS v" APP_VERSION "  -  %u KB free",
                               "Hilfe - FTP4DOS v" APP_VERSION "  -  %u KB frei"),
-                    assoc_free_kb());
+                    img_free_kb());
             dlg_message(htitle,
                 L("\n"
                   "Tab        Switch active pane\n"

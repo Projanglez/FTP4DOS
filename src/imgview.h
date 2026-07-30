@@ -18,6 +18,21 @@ int img_probe_file(const char *path);
  * download is worth starting before spending the transfer. */
 int img_ext_known(const char *ext);
 
+/* 1 when 'ext' names a binary image format at all, decodable or not. Used to
+ * warn before dumping a JPEG into the text viewer. */
+int img_is_image_ext(const char *ext);
+
+/* Extension of a file name (after the last dot), "" when there is none.
+ * Returns a pointer into 'name'. */
+const char *img_ext_of(const char *name);
+
+/* Largest free conventional memory block, in KB. A picture needs roughly
+ * 100 KB of it, so this is what decides whether one can be shown at all -
+ * which is why it is reported on the help screen and in the out-of-memory
+ * dialog. Idle heap blocks are handed back to DOS before measuring, because
+ * Watcom's far heap keeps everything free() gives it. */
+unsigned img_free_kb(void);
+
 /* Decode and display 'path'. The image is decoded in text mode (so failures
  * are ordinary dialogs and a slow decode can show progress), then the display
  * switches to graphics, shows it, and waits for a key.
