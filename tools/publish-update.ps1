@@ -41,6 +41,7 @@ param(
     [string]$Repo  = "Projanglez/FTP4DOS",
     [string]$OpenSsl,
     [string]$PassFile,
+    [switch]$Republish,
     [switch]$DryRun
 )
 
@@ -107,6 +108,89 @@ function Get-EmbeddedPublicKeys {
 
 $privText = Get-Content -Raw $PrivateKey
 if ($privText -notmatch 'PRIVATE KEY') { throw "$PrivateKey is not a private key" }
+
+# ---------------------------------------------------------------------------
+# Guard 3: the executable must actually carry the version being published
+#
+# APP_VERSION is compiled into several strings ("Help - FTP4DOS v1.2.0 ..."), so
+# the binary can be asked what it thinks it is. Two mistakes this catches, both
+# of which fail silently in the field:
+#
+#   - Publishing a build that still says 1.2.0-dev under the name 1.2.1. Clients
+#     install it, still report the -dev version, and are offered the same update
+#     forever - an update loop nobody notices.
+#   - Publishing an executable that was never rebuilt after the version bump.
+# ---------------------------------------------------------------------------
+$exeText = [System.Text.Encoding]::GetEncoding(28591).GetString(
+               [System.IO.File]::ReadAllBytes($exePath))
+# @() matters: a single match would otherwise come back as a bare string, and
+# $stamped[0] would index its first CHARACTER instead of the version.
+$stamped = @([regex]::Matches($exeText, 'FTP4DOS v([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+)?)') |
+             ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+
+if (-not $stamped) {
+    throw "cannot find a version string in $exePath - is it really an FTP4DOS build?"
+}
+if ($stamped.Count -gt 1) {
+    throw "found conflicting version strings in ${exePath}: $($stamped -join ', ')"
+}
+if ($stamped[0] -ne $Version) {
+    throw @"
+$Exe reports version '$($stamped[0])', but you are publishing '$Version'.
+
+Set APP_VERSION in src/ncftp.cpp to '$Version', rebuild with wmake, and run
+this again. Publishing as-is would leave every client reporting
+'$($stamped[0])' after updating, so they would be offered this same update on
+every check.
+"@
+}
+Write-Host "executable reports version $($stamped[0])" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Guard 4: the version has to be newer than the one already published
+#
+# Forgetting the bump is invisible otherwise: the release goes out, every client
+# says "up to date", and it reaches nobody. Re-running for a version that is
+# already live is legitimate (replacing an asset), so that needs -Republish
+# rather than being impossible.
+# ---------------------------------------------------------------------------
+function ConvertTo-VersionParts {
+    param([string]$V)
+    if ($V -match '^v?([0-9]+)\.([0-9]+)\.([0-9]+)') {
+        return [int[]]@($Matches[1], $Matches[2], $Matches[3])
+    }
+    return $null
+}
+
+$latestTag = & gh api "repos/$Repo/releases/latest" --jq '.tag_name' 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $latestTag) {
+    Write-Host "could not read the current latest release - skipping the version check" -ForegroundColor Yellow
+} else {
+    $new = ConvertTo-VersionParts $Version
+    $old = ConvertTo-VersionParts $latestTag
+    if ($new -and $old) {
+        $cmp = 0
+        for ($i = 0; $i -lt 3 -and $cmp -eq 0; $i++) {
+            if ($new[$i] -ne $old[$i]) { $cmp = if ($new[$i] -lt $old[$i]) { -1 } else { 1 } }
+        }
+        if ($cmp -le 0 -and -not $Republish) {
+            throw @"
+Version $Version is not newer than the published $latestTag.
+
+Every client compares version numbers, so this update would be invisible: they
+would all report "up to date" and never fetch it.
+
+Bump APP_VERSION and rebuild, or pass -Republish if you really mean to replace
+the assets of a version that is already out.
+"@
+        }
+        if ($cmp -le 0) {
+            Write-Host "republishing $Version over $latestTag as requested" -ForegroundColor Yellow
+        } else {
+            Write-Host "version $Version supersedes the published $latestTag" -ForegroundColor Green
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Manifest
