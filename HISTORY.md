@@ -229,3 +229,15 @@ Image viewing
   dialog repeats it.
 - Not decoded, and refused with a clear message rather than a guess: JPEG, TIFF,
   interlaced PNG, and BMP variants beyond those listed.
+
+## v1.2.1 — 2026-07-31
+
+Performance fix for /EXMEM (now the default remote-panel backend)
+
+- **Cursor movement no longer rescans the whole listing.** The status bar's
+  marked-count/size/dir-count were recomputed by scanning every entry on each
+  arrow-key press, even with nothing marked. Under /EXMEM that meant a real-mode
+  XMS/EMS driver call per entry per keypress - the main cause of the slowdown
+  since /EXMEM became the default. The totals are now tracked incrementally
+  instead, so the status bar is O(1) regardless of listing size or backend.
+- `clear_marks()` also skips its scan entirely when nothing is marked.
