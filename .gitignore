@@ -46,6 +46,9 @@ keys/
 .vscode/
 CLAUDE.md
 
+# Interner Release-Ablauf (Pfade zu Signaturschluesseln etc.) - nicht oeffentlich
+RELEASING.md
+
 # QEMU-Test-VMs: Nichts davon einchecken.
 vm/
 vm71/
