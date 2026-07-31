@@ -106,6 +106,7 @@ Panel::Panel()
     names = 0;                           /* set by the subclass                  */
     count = 0; total = 0; truncated = 0;
     cursor = 0; topentry = 0; active = 0;
+    mCount = 0; mSize = 0; mDirCount = 0;
     header[0] = '\0';
     selName[0] = '\0'; atName[0] = '\0';
     s_key = SORT_NAME; s_desc = 0;
@@ -302,8 +303,17 @@ void Panel::toggle_mark()
     int old_top    = topentry;
     PanelEntry *e  = selected();
 
-    if (e && !e->is_parent)
-        store->set_marked(cursor, e->marked ? 0 : 1);
+    if (e && !e->is_parent) {
+        int newv = e->marked ? 0 : 1;
+        store->set_marked(cursor, newv);
+        if (newv) {
+            mCount++;
+            if (e->is_dir) mDirCount++; else mSize += e->size;
+        } else {
+            mCount--;
+            if (e->is_dir) mDirCount--; else mSize -= e->size;
+        }
+    }
 
     cursor++;                    /* like Norton Commander: move on down */
     clamp_scroll();
@@ -321,9 +331,16 @@ void Panel::toggle_mark()
 void Panel::invert_marks()
 {
     int i;
+    reset_marks();
     for (i = 0; i < count; i++) {
         const PanelEntry *e = store->peek(i);
-        if (!e->is_parent) store->set_marked(i, e->marked ? 0 : 1);
+        if (e->is_parent) continue;
+        int newv = e->marked ? 0 : 1;
+        store->set_marked(i, newv);
+        if (newv) {
+            mCount++;
+            if (e->is_dir) mDirCount++; else mSize += e->size;
+        }
     }
     draw();
 }
@@ -331,35 +348,24 @@ void Panel::invert_marks()
 void Panel::clear_marks()
 {
     int i;
+    if (mCount == 0) return;     /* nothing marked - skip the full scan */
     for (i = 0; i < count; i++) store->set_marked(i, 0);
+    reset_marks();
 }
 
 int Panel::marked_count() const
 {
-    int i, n = 0;
-    for (i = 0; i < count; i++) if (store->peek(i)->marked) n++;
-    return n;
+    return mCount;
 }
 
 unsigned long Panel::marked_size() const
 {
-    unsigned long s = 0;
-    int i;
-    for (i = 0; i < count; i++) {
-        const PanelEntry *e = store->peek(i);
-        if (e->marked && !e->is_dir) s += e->size;
-    }
-    return s;
+    return mSize;
 }
 
 int Panel::marked_dir_count() const
 {
-    int i, n = 0;
-    for (i = 0; i < count; i++) {
-        const PanelEntry *e = store->peek(i);
-        if (e->marked && e->is_dir) n++;
-    }
-    return n;
+    return mDirCount;
 }
 
 int Panel::find_entry(const char *name) const
@@ -394,6 +400,14 @@ int Panel::find_prefix(const char *prefix, int start) const
     return -1;
 }
 
+/* Mark entry i (already known unmarked) and keep the running totals in sync. */
+void Panel::mark_new(int i, int isdir, unsigned long esize)
+{
+    store->set_marked(i, 1);
+    mCount++;
+    if (isdir) mDirCount++; else mSize += esize;
+}
+
 void Panel::compare_mark(const Panel *other)
 {
     int i;
@@ -403,16 +417,16 @@ void Panel::compare_mark(const Panel *other)
         int           isdir;
         unsigned long esize;
         int           idx;
-        if (e->is_parent) continue;
-        if (other_empty) { store->set_marked(i, 1); continue; }
-        /* Capture before touching the other panel's store (separate ring). */
+        if (e->is_parent || e->marked) continue;   /* already marked: leave totals alone */
         isdir = e->is_dir;
         esize = e->size;
-        idx   = other->find_entry(e->name);   /* e->name: this ring, still valid */
+        if (other_empty) { mark_new(i, isdir, esize); continue; }
+        /* Capture before touching the other panel's store (separate ring). */
+        idx = other->find_entry(e->name);   /* e->name: this ring, still valid */
         if (idx < 0)
-            store->set_marked(i, 1);
+            mark_new(i, isdir, esize);
         else if (!isdir && other->store->peek(idx)->size != esize)
-            store->set_marked(i, 1);
+            mark_new(i, isdir, esize);
     }
     draw();
 }

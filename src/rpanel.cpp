@@ -466,6 +466,7 @@ int RemotePanel::refresh()
     cursor = 0;
     topentry = 0;
     navFailed = 0;
+    reset_marks();
     store->reset();
 
     if (!ftp || !ftp->is_connected()) {

@@ -181,6 +181,9 @@ protected:
     /* Index of the entry with this name (-1 = not found, case-insensitive).
      * Internal helper for has_entry and compare_mark. */
     int         find_entry(const char *name) const;
+    /* Mark a known-unmarked entry and update the running mark totals.
+     * Internal helper for compare_mark(). */
+    void        mark_new(int i, int isdir, unsigned long esize);
     /* --- Screen region --- */
     int top, left, height, width;
 
@@ -205,6 +208,17 @@ protected:
     int        count;       /* number of valid entries              */
     int        total;       /* entries the directory actually had (>= count)    */
     unsigned char truncated;/* 1 = more entries existed than fit                */
+
+    /* --- Mark totals (kept incrementally, NOT rescanned) ---
+     * marked_count()/marked_size()/marked_dir_count() used to rescan the whole
+     * store on every call. draw_statusbar() calls all three on every cursor
+     * move, so under /EXMEM that meant a full XMS/EMS round trip per entry on
+     * every arrow key - even with nothing marked. Every mutator below (and
+     * refresh(), via reset_marks()) keeps these in sync instead. */
+    int           mCount;   /* == marked_count()                    */
+    unsigned long mSize;    /* == marked_size()                     */
+    int           mDirCount;/* == marked_dir_count()                */
+    void reset_marks() { mCount = 0; mSize = 0; mDirCount = 0; }
     int        cursor;      /* index of the selected entry          */
     int        topentry;    /* index of the first visible entry     */
     int        active;      /* 1 = active panel                     */

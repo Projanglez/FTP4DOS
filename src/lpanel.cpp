@@ -61,6 +61,7 @@ int LocalPanel::refresh()
     count     = 0;
     total     = 0;
     truncated = 0;
+    reset_marks();
     store->reset();
     read_cwd();
     strncpy(header, cwd, PANEL_HEADER_MAX - 1);
