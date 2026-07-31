@@ -116,8 +116,9 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' \
 
 ## Publishing an update
 
-The Worker never needs redeploying. It proxies the `gh-pages` branch, so
-publishing is a git push — see `tools/publish-update.ps1`.
+The Worker never needs redeploying. It proxies the repository's latest GitHub
+release, so publishing is creating a release and attaching the signed assets —
+see `tools/publish-update.ps1`.
 
 ## Notes
 
